@@ -1,0 +1,242 @@
+{
+  "summary": {
+    "passed": 20,
+    "failed": 0,
+    "warnings": 3
+  },
+  "manifest": {
+    "runAt": "2026-07-04T16:54:21.030Z",
+    "phase": "11.5",
+    "components": {
+      "docs": {
+        "required": 8,
+        "present": 8
+      },
+      "scripts": {
+        "required": 8,
+        "present": 8
+      }
+    },
+    "subValidations": {
+      "11.2": {
+        "passed": 10,
+        "failed": 0,
+        "warnings": 2
+      },
+      "11.3": {
+        "passed": 13,
+        "failed": 0,
+        "warnings": 2
+      },
+      "11.4": {
+        "passed": 24,
+        "failed": 0,
+        "warnings": 2
+      }
+    },
+    "risks": [
+      {
+        "id": "R1",
+        "area": "Physical backup",
+        "severity": "medium",
+        "description": "MongoDB Database Tools not verified on validation host — mongodump/mongorestore skipped",
+        "mitigation": "Install tools on ops host; re-run validate-backup-batch11.js and validate-restore-batch11.js",
+        "status": "open"
+      },
+      {
+        "id": "R2",
+        "area": "Atlas DR",
+        "severity": "medium",
+        "description": "Atlas Cloud Backup enablement and PITR drill not executed in this phase",
+        "mitigation": "Enable Cloud Backup before beta; schedule restore drill to staging cluster",
+        "status": "open"
+      },
+      {
+        "id": "R3",
+        "area": "Secrets",
+        "severity": "medium",
+        "description": "Runtime secrets (.env) not in DB backup — require separate secret manager export",
+        "mitigation": "Store production env in encrypted secret manager with documented export",
+        "status": "open"
+      },
+      {
+        "id": "R4",
+        "area": "External media",
+        "severity": "low",
+        "description": "20 https:// image URLs backed up as strings only — remote files not mirrored",
+        "mitigation": "Migrate to embedded WebP or document CDN backup SLA",
+        "status": "open"
+      },
+      {
+        "id": "R5",
+        "area": "Logical restore",
+        "severity": "low",
+        "description": "Index restore verified only on physical mongorestore path",
+        "mitigation": "Complete physical restore round-trip on ops environment",
+        "status": "open"
+      },
+      {
+        "id": "R6",
+        "area": "Legacy collections",
+        "severity": "low",
+        "description": "6 orphan MongoDB collections included in dumps but not in current models",
+        "mitigation": "Include in all full backups; review archival in future phase",
+        "status": "open"
+      },
+      {
+        "id": "R7",
+        "area": "Env documentation",
+        "severity": "low",
+        "description": "MASTER_KEY, TRUST_PROXY, rate limits not in backend/.env.example",
+        "mitigation": "Add to template when updating secret manager runbook",
+        "status": "open"
+      },
+      {
+        "id": "R8",
+        "area": "Automation",
+        "severity": "low",
+        "description": "No scheduled backup cron in repository — relies on Atlas or manual ops",
+        "mitigation": "Configure Atlas retention + optional weekly mongodump Task Scheduler/cron",
+        "status": "open"
+      }
+    ],
+    "readiness": {
+      "database": {
+        "name": "test",
+        "collections": 40,
+        "documents": 793
+      },
+      "riskSummary": {
+        "open": 8,
+        "medium": 3,
+        "low": 5
+      },
+      "grades": {
+        "databaseBackup": "B",
+        "databaseRestore": "B",
+        "mediaBackup": "A",
+        "configurationBackup": "A",
+        "documentation": "A",
+        "operationalAutomation": "C",
+        "overall": "B"
+      }
+    }
+  },
+  "results": [
+    {
+      "name": "component_doc",
+      "status": "PASS",
+      "detail": "docs/database-backup-procedure.md"
+    },
+    {
+      "name": "component_doc",
+      "status": "PASS",
+      "detail": "docs/database-recovery-procedure.md"
+    },
+    {
+      "name": "component_doc",
+      "status": "PASS",
+      "detail": "docs/batch-11.2-database-backup-report.md"
+    },
+    {
+      "name": "component_doc",
+      "status": "PASS",
+      "detail": "docs/batch-11.3-restore-validation-report.md"
+    },
+    {
+      "name": "component_doc",
+      "status": "PASS",
+      "detail": "docs/batch-11.4-media-backup-report.md"
+    },
+    {
+      "name": "component_doc",
+      "status": "PASS",
+      "detail": "docs/batch-11.4-configuration-backup-report.md"
+    },
+    {
+      "name": "component_doc",
+      "status": "PASS",
+      "detail": "docs/batch-11-final-backup-report.md"
+    },
+    {
+      "name": "component_doc",
+      "status": "PASS",
+      "detail": "docs/batch-11-backup-recovery-readiness.md"
+    },
+    {
+      "name": "component_script",
+      "status": "PASS",
+      "detail": "backend/scripts/backup-mongodb.ps1"
+    },
+    {
+      "name": "component_script",
+      "status": "PASS",
+      "detail": "backend/scripts/backup-mongodb.sh"
+    },
+    {
+      "name": "component_script",
+      "status": "PASS",
+      "detail": "backend/scripts/restore-mongodb.ps1"
+    },
+    {
+      "name": "component_script",
+      "status": "PASS",
+      "detail": "backend/scripts/restore-mongodb.sh"
+    },
+    {
+      "name": "component_script",
+      "status": "PASS",
+      "detail": "backend/scripts/validate-backup-batch11.js"
+    },
+    {
+      "name": "component_script",
+      "status": "PASS",
+      "detail": "backend/scripts/validate-restore-batch11.js"
+    },
+    {
+      "name": "component_script",
+      "status": "PASS",
+      "detail": "backend/scripts/validate-media-config-batch11.js"
+    },
+    {
+      "name": "component_script",
+      "status": "PASS",
+      "detail": "backend/scripts/validate-backup-strategy-batch11.js"
+    },
+    {
+      "name": "sub_validation_run",
+      "status": "WARN",
+      "detail": "Batch 11.2: 10 pass / 0 fail / 2 warn"
+    },
+    {
+      "name": "sub_validation_run",
+      "status": "WARN",
+      "detail": "Batch 11.3: 13 pass / 0 fail / 2 warn"
+    },
+    {
+      "name": "sub_validation_run",
+      "status": "WARN",
+      "detail": "Batch 11.4: 24 pass / 0 fail / 2 warn"
+    },
+    {
+      "name": "restore_readiness_db",
+      "status": "PASS",
+      "detail": "Live DB \"test\" — 40 collections, 793 documents"
+    },
+    {
+      "name": "restore_readiness_health_endpoint",
+      "status": "PASS",
+      "detail": "GET /api/v1/health available for post-restore smoke test"
+    },
+    {
+      "name": "risk_registry",
+      "status": "PASS",
+      "detail": "8 open risks (3 medium, 5 low)"
+    },
+    {
+      "name": "readiness_grades",
+      "status": "PASS",
+      "detail": "Overall B — ready for beta with ops layer (Atlas + secret manager + physical drill)"
+    }
+  ]
+}

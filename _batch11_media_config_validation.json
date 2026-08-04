@@ -1,0 +1,298 @@
+{
+  "summary": {
+    "passed": 24,
+    "failed": 0,
+    "warnings": 2
+  },
+  "manifest": {
+    "runAt": "2026-07-04T16:58:00.836Z",
+    "media": {
+      "users": {
+        "data_url": 1,
+        "https_url": 0,
+        "http_url": 0,
+        "empty": 212,
+        "other": 0,
+        "docsWithMedia": 1
+      },
+      "stores": {
+        "data_url": 2,
+        "https_url": 0,
+        "http_url": 0,
+        "empty": 16,
+        "other": 0,
+        "docsWithMedia": 1
+      },
+      "products": {
+        "data_url": 3,
+        "https_url": 5,
+        "http_url": 0,
+        "empty": 0,
+        "other": 0,
+        "docsWithMedia": 8
+      },
+      "offers": {
+        "data_url": 3,
+        "https_url": 7,
+        "http_url": 0,
+        "empty": 3,
+        "other": 0,
+        "docsWithMedia": 10
+      },
+      "bazaarlistings": {
+        "data_url": 1,
+        "https_url": 0,
+        "http_url": 0,
+        "empty": 0,
+        "other": 0,
+        "docsWithMedia": 1
+      },
+      "competitions": {
+        "data_url": 0,
+        "https_url": 1,
+        "http_url": 0,
+        "empty": 1,
+        "other": 2,
+        "docsWithMedia": 1
+      },
+      "messages": {
+        "data_url": 4,
+        "https_url": 0,
+        "http_url": 0,
+        "empty": 22,
+        "other": 0,
+        "docsWithMedia": 4
+      },
+      "wheelprizes": {
+        "data_url": 1,
+        "https_url": 2,
+        "http_url": 0,
+        "empty": 2,
+        "other": 0,
+        "docsWithMedia": 3
+      },
+      "achievementmilestones": {
+        "data_url": 1,
+        "https_url": 5,
+        "http_url": 0,
+        "empty": 0,
+        "other": 0,
+        "docsWithMedia": 6
+      },
+      "storememberprizes": {
+        "data_url": 0,
+        "https_url": 0,
+        "http_url": 0,
+        "empty": 0,
+        "other": 0,
+        "docsWithMedia": 0
+      },
+      "summary": {
+        "collectionsScanned": 10,
+        "embeddedDataUrls": 16,
+        "externalHttpsUrls": 20,
+        "documentsWithMedia": 35
+      }
+    },
+    "configuration": {
+      "systemSettingKeys": [
+        "draws_enabled",
+        "maintenance_mode_enabled",
+        "marketplace_enabled",
+        "platform_sensitive_password_hash",
+        "referral_verification_gate_migrated",
+        "store_competitions_enabled",
+        "store_owner_cart_enabled",
+        "store_owner_competitions_enabled",
+        "store_owner_member_prizes_enabled",
+        "store_owner_warehouses_enabled",
+        "wheel_enabled"
+      ],
+      "systemSettingCount": 11
+    },
+    "environment": {
+      "gitignore": {
+        "exists": true,
+        "blocksEnv": true,
+        "allowsExample": true
+      },
+      "backendExampleKeys": [
+        "MONGO_URI",
+        "JWT_SECRET",
+        "APP_NAME",
+        "CUSTOMER_APP_URL",
+        "SMTP_HOST",
+        "SMTP_PORT",
+        "SMTP_SECURE",
+        "SMTP_USER",
+        "SMTP_PASS",
+        "SMTP_FROM",
+        "TWILIO_ACCOUNT_SID",
+        "TWILIO_AUTH_TOKEN",
+        "TWILIO_PHONE_NUMBER",
+        "GOOGLE_CLIENT_ID",
+        "TIKTOK_CLIENT_KEY",
+        "TIKTOK_CLIENT_SECRET",
+        "TIKTOK_REDIRECT_URI",
+        "ADMIN_EMAIL",
+        "ADMIN_PASSWORD",
+        "CORS_ORIGINS"
+      ],
+      "handling": {
+        "storage": "Local .env files per app — excluded from git",
+        "backupMethod": "Secret manager / encrypted ops vault — NOT mongodump or git",
+        "template": ".env.example committed as structure-only template"
+      }
+    },
+    "assets": {
+      "staticFiles": {
+        "found": [
+          "store-supplier-frontend/public/icons.svg",
+          "store-supplier-frontend/public/favicon.svg",
+          "store-supplier-frontend/src/assets/vite.svg",
+          "store-supplier-frontend/src/assets/react.svg"
+        ],
+        "missing": []
+      },
+      "coverage": {
+        "media": "MongoDB mongodump (embedded data URLs + https refs)",
+        "platformConfig": "MongoDB systemsettings collection",
+        "runtimeSecrets": "Encrypted secret manager — manual export of .env",
+        "staticUiAssets": "Git repository",
+        "backupScripts": "Git repository"
+      }
+    }
+  },
+  "results": [
+    {
+      "name": "doc_media_report",
+      "status": "PASS",
+      "detail": "docs/batch-11.4-media-backup-report.md"
+    },
+    {
+      "name": "doc_config_report",
+      "status": "PASS",
+      "detail": "docs/batch-11.4-configuration-backup-report.md"
+    },
+    {
+      "name": "env_gitignore_blocks",
+      "status": "PASS",
+      "detail": "Root .gitignore excludes .env files"
+    },
+    {
+      "name": "env_gitignore_allows_example",
+      "status": "PASS",
+      "detail": "!.env.example exception present"
+    },
+    {
+      "name": "env_example_exists",
+      "status": "PASS",
+      "detail": "backend: backend/.env.example"
+    },
+    {
+      "name": "env_example_exists",
+      "status": "PASS",
+      "detail": "customerFrontend: customerFrontend/.env.example"
+    },
+    {
+      "name": "env_example_exists",
+      "status": "PASS",
+      "detail": "store-supplier-frontend: store-supplier-frontend/.env.example"
+    },
+    {
+      "name": "env_example_exists",
+      "status": "PASS",
+      "detail": "admin-panelFrontend: admin-panelFrontend/.env.example"
+    },
+    {
+      "name": "env_example_coverage",
+      "status": "PASS",
+      "detail": "backend/.env.example documents required production keys"
+    },
+    {
+      "name": "env_example_optional_gaps",
+      "status": "WARN",
+      "detail": "Used in code but not in .env.example: MASTER_KEY, MONGODB_SLOW_QUERY_MS, TRUST_PROXY, API_RATE_LIMIT_MAX"
+    },
+    {
+      "name": "env_local_present",
+      "status": "PASS",
+      "detail": "backend/.env exists locally (not for git)"
+    },
+    {
+      "name": "env_local_present",
+      "status": "PASS",
+      "detail": "customerFrontend/.env exists locally (not for git)"
+    },
+    {
+      "name": "env_local_present",
+      "status": "PASS",
+      "detail": "store-supplier-frontend/.env exists locally (not for git)"
+    },
+    {
+      "name": "env_local_present",
+      "status": "PASS",
+      "detail": "admin-panelFrontend/.env exists locally (not for git)"
+    },
+    {
+      "name": "env_handling_policy",
+      "status": "PASS",
+      "detail": "Secrets in .env excluded from git; backup via secret manager documented"
+    },
+    {
+      "name": "assets_static_files",
+      "status": "PASS",
+      "detail": "4 tracked static assets present"
+    },
+    {
+      "name": "assets_backup_tooling",
+      "status": "PASS",
+      "detail": "Batch 11.2/11.3 backup scripts present"
+    },
+    {
+      "name": "assets_coverage_matrix",
+      "status": "PASS",
+      "detail": "Media, config, env, and static assets mapped to backup methods"
+    },
+    {
+      "name": "mongo_uri_configured",
+      "status": "PASS",
+      "detail": "MONGO_URI present"
+    },
+    {
+      "name": "live_db_connection",
+      "status": "PASS",
+      "detail": "Connected to \"test\""
+    },
+    {
+      "name": "media_inventory_live",
+      "status": "PASS",
+      "detail": "16 embedded data URLs, 20 external https URLs across 35 documents"
+    },
+    {
+      "name": "media_backup_coverage",
+      "status": "PASS",
+      "detail": "All uploaded media stored in MongoDB fields — covered by mongodump (Batch 11.2)"
+    },
+    {
+      "name": "media_filesystem_uploads",
+      "status": "PASS",
+      "detail": "No filesystem upload directory — media is DB-embedded only"
+    },
+    {
+      "name": "config_systemsettings_exists",
+      "status": "PASS",
+      "detail": "11 SystemSetting documents in MongoDB"
+    },
+    {
+      "name": "config_platform_keys",
+      "status": "WARN",
+      "detail": "5 keys use code defaults only: referral_reward_points, referral_program_enabled, wheel_spin_cost, wheel_spin_interval_ms, wheel_placements"
+    },
+    {
+      "name": "config_backup_coverage",
+      "status": "PASS",
+      "detail": "SystemSetting collection included in mongodump — runtime toggles restored with DB"
+    }
+  ]
+}

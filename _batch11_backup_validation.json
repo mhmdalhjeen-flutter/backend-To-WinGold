@@ -1,0 +1,164 @@
+{
+  "summary": {
+    "passed": 10,
+    "failed": 0,
+    "warnings": 2
+  },
+  "manifest": {
+    "runAt": "2026-07-04T16:54:21.085Z",
+    "database": "test",
+    "collections": {
+      "achievementmilestones": 6,
+      "activationcodes": 11,
+      "activitylogs": 165,
+      "admincodes": 3,
+      "bazaarlistings": 1,
+      "cardtypes": 5,
+      "carts": 6,
+      "categories": 7,
+      "codeorders": 20,
+      "competitions": 4,
+      "conversations": 17,
+      "dailyprizes": 0,
+      "disclaimers": 0,
+      "drawbatches": 0,
+      "honorboards": 5,
+      "marketplaceitems": 5,
+      "messages": 26,
+      "notifications": 36,
+      "offers": 13,
+      "orders": 10,
+      "prizes": 0,
+      "products": 8,
+      "promocodes": 46,
+      "ranks": 0,
+      "ratings": 9,
+      "referralbatchbuffers": 0,
+      "regions": 7,
+      "storememberprizes": 0,
+      "storememberships": 6,
+      "stores": 9,
+      "supports": 0,
+      "systemsettings": 11,
+      "treasureboxes": 0,
+      "useractivities": 78,
+      "users": 213,
+      "usersuggestions": 1,
+      "wheelprizes": 5,
+      "wheels": 1,
+      "wheelspins": 42,
+      "wheelwins": 17
+    },
+    "legacyCollections": [
+      "disclaimers",
+      "marketplaceitems",
+      "prizes",
+      "ranks",
+      "supports",
+      "wheels"
+    ],
+    "appModelCollections": [
+      "users",
+      "stores",
+      "products",
+      "offers",
+      "categories",
+      "regions",
+      "carts",
+      "orders",
+      "codeorders",
+      "cardtypes",
+      "activationcodes",
+      "promocodes",
+      "treasureboxes",
+      "dailyprizes",
+      "drawbatches",
+      "honorboards",
+      "systemsettings",
+      "activitylogs",
+      "messages",
+      "conversations",
+      "wheelprizes",
+      "wheelspins",
+      "wheelwins",
+      "ratings",
+      "notifications",
+      "bazaarlistings",
+      "competitions",
+      "admincodes",
+      "storememberships",
+      "storememberprizes",
+      "useractivities",
+      "referralbatchbuffers",
+      "usersuggestions",
+      "achievementmilestones"
+    ],
+    "dump": null,
+    "integrity": {
+      "readableCollections": 40,
+      "unreadableCollections": []
+    }
+  },
+  "results": [
+    {
+      "name": "doc_backup_procedure",
+      "status": "PASS",
+      "detail": "docs/database-backup-procedure.md"
+    },
+    {
+      "name": "script_backup_ps1",
+      "status": "PASS",
+      "detail": "backend/scripts/backup-mongodb.ps1"
+    },
+    {
+      "name": "script_backup_sh",
+      "status": "PASS",
+      "detail": "backend/scripts/backup-mongodb.sh"
+    },
+    {
+      "name": "mongo_uri_configured",
+      "status": "PASS",
+      "detail": "MONGO_URI present"
+    },
+    {
+      "name": "live_db_connection",
+      "status": "PASS",
+      "detail": "Connected to database \"test\""
+    },
+    {
+      "name": "collection_inventory",
+      "status": "PASS",
+      "detail": "40 collections, 793 documents"
+    },
+    {
+      "name": "app_model_collections",
+      "status": "PASS",
+      "detail": "All 34 app model collections present"
+    },
+    {
+      "name": "legacy_collections",
+      "status": "WARN",
+      "detail": "6 non-model collections included in backup scope: disclaimers, marketplaceitems, prizes, ranks, supports, wheels"
+    },
+    {
+      "name": "backup_consistency_counts",
+      "status": "PASS",
+      "detail": "Document counts stable across double-read"
+    },
+    {
+      "name": "backup_integrity_read",
+      "status": "PASS",
+      "detail": "40 collections readable (sample doc or empty)"
+    },
+    {
+      "name": "backup_integrity_indexes",
+      "status": "PASS",
+      "detail": "Index metadata readable on critical collections"
+    },
+    {
+      "name": "mongodump_skipped",
+      "status": "WARN",
+      "detail": "--skip-dump flag set"
+    }
+  ]
+}

@@ -1,0 +1,203 @@
+{
+  "summary": {
+    "passed": 13,
+    "failed": 0,
+    "warnings": 2
+  },
+  "manifest": {
+    "runAt": "2026-07-04T16:55:26.605Z",
+    "sourceDatabase": "test",
+    "scratchDatabase": "test_restore_verify_1783184164894",
+    "sourceCollections": {
+      "achievementmilestones": 6,
+      "activationcodes": 11,
+      "activitylogs": 165,
+      "admincodes": 3,
+      "bazaarlistings": 1,
+      "cardtypes": 5,
+      "carts": 6,
+      "categories": 7,
+      "codeorders": 20,
+      "competitions": 4,
+      "conversations": 17,
+      "dailyprizes": 0,
+      "disclaimers": 0,
+      "drawbatches": 0,
+      "honorboards": 5,
+      "marketplaceitems": 5,
+      "messages": 26,
+      "notifications": 36,
+      "offers": 13,
+      "orders": 10,
+      "prizes": 0,
+      "products": 8,
+      "promocodes": 46,
+      "ranks": 0,
+      "ratings": 9,
+      "referralbatchbuffers": 0,
+      "regions": 7,
+      "storememberprizes": 0,
+      "storememberships": 6,
+      "stores": 9,
+      "supports": 0,
+      "systemsettings": 11,
+      "treasureboxes": 0,
+      "useractivities": 78,
+      "users": 213,
+      "usersuggestions": 1,
+      "wheelprizes": 5,
+      "wheels": 1,
+      "wheelspins": 42,
+      "wheelwins": 17
+    },
+    "restoreMethod": "logical",
+    "fingerprints": {
+      "source": {
+        "users": {
+          "count": 213,
+          "firstId": "6a40cdef3b4a13f3795d3380",
+          "lastId": "6a492133406ee33c66301bee",
+          "aggSum": 202
+        },
+        "stores": {
+          "count": 9,
+          "firstId": "6a40cdef3b4a13f3795d3381",
+          "lastId": "6a4904148a6e3894631830e3",
+          "aggSum": null
+        },
+        "orders": {
+          "count": 10,
+          "firstId": "6a44fea76a98d77e9ee781b3",
+          "lastId": "6a48a55df0dd1cec88a86326",
+          "aggSum": 230
+        },
+        "offers": {
+          "count": 13,
+          "firstId": "6a412db9e7e7652c6f906998",
+          "lastId": "6a49162f249a7391af885413",
+          "aggSum": null
+        },
+        "products": {
+          "count": 8,
+          "firstId": "6a40cf2e3b4a13f3795d3385",
+          "lastId": "6a491633249a7391af885416",
+          "aggSum": null
+        }
+      },
+      "restored": {
+        "users": {
+          "count": 213,
+          "firstId": "6a40cdef3b4a13f3795d3380",
+          "lastId": "6a492133406ee33c66301bee",
+          "aggSum": 202
+        },
+        "stores": {
+          "count": 9,
+          "firstId": "6a40cdef3b4a13f3795d3381",
+          "lastId": "6a4904148a6e3894631830e3",
+          "aggSum": null
+        },
+        "orders": {
+          "count": 10,
+          "firstId": "6a44fea76a98d77e9ee781b3",
+          "lastId": "6a48a55df0dd1cec88a86326",
+          "aggSum": 230
+        },
+        "offers": {
+          "count": 13,
+          "firstId": "6a412db9e7e7652c6f906998",
+          "lastId": "6a49162f249a7391af885413",
+          "aggSum": null
+        },
+        "products": {
+          "count": 8,
+          "firstId": "6a40cf2e3b4a13f3795d3385",
+          "lastId": "6a491633249a7391af885416",
+          "aggSum": null
+        }
+      }
+    },
+    "postRestore": {
+      "collectionsCompared": 40,
+      "countDrift": 0,
+      "fingerprintDrift": 0
+    }
+  },
+  "results": [
+    {
+      "name": "doc_recovery_procedure",
+      "status": "PASS",
+      "detail": "docs/database-recovery-procedure.md"
+    },
+    {
+      "name": "doc_backup_procedure_linked",
+      "status": "PASS",
+      "detail": "docs/database-backup-procedure.md"
+    },
+    {
+      "name": "script_restore_ps1",
+      "status": "PASS",
+      "detail": "backend/scripts/restore-mongodb.ps1"
+    },
+    {
+      "name": "script_restore_sh",
+      "status": "PASS",
+      "detail": "backend/scripts/restore-mongodb.sh"
+    },
+    {
+      "name": "mongo_uri_configured",
+      "status": "PASS",
+      "detail": "MONGO_URI present"
+    },
+    {
+      "name": "source_db_connection",
+      "status": "PASS",
+      "detail": "Connected to \"test\""
+    },
+    {
+      "name": "source_collection_inventory",
+      "status": "PASS",
+      "detail": "40 collections, 793 documents"
+    },
+    {
+      "name": "physical_restore_skipped",
+      "status": "WARN",
+      "detail": "mongodump/mongorestore unavailable — using logical scratch restore"
+    },
+    {
+      "name": "restore_process_logical",
+      "status": "PASS",
+      "detail": "Copying 40 collections → \"test_restore_verify_1783184164894\""
+    },
+    {
+      "name": "restore_backup_restoration",
+      "status": "PASS",
+      "detail": "Logical copy complete — 40 collections processed"
+    },
+    {
+      "name": "restore_consistency_counts",
+      "status": "PASS",
+      "detail": "40 collections — counts match source"
+    },
+    {
+      "name": "restore_consistency_fingerprints",
+      "status": "PASS",
+      "detail": "Fingerprints match on users, stores, orders, offers, products"
+    },
+    {
+      "name": "restore_consistency_references",
+      "status": "PASS",
+      "detail": "Order→user reference intact after restore"
+    },
+    {
+      "name": "restore_integrity_indexes",
+      "status": "WARN",
+      "detail": "Logical restore — indexes not copied (physical mongorestore required for index verification)"
+    },
+    {
+      "name": "restore_cleanup",
+      "status": "PASS",
+      "detail": "Dropped scratch DB \"test_restore_verify_1783184164894\""
+    }
+  ]
+}
