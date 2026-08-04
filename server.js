@@ -66,7 +66,7 @@ const DEFAULT_PROD_ORIGINS = [
     "https://winzor.netlify.app",
     "https://win-gold-moll.pages.dev",
     "https://win-gold-supplier.pages.dev",
-    "https://adminwingold.pages.dev/",
+    "https://adminwingold.pages.dev",
     "https://delivery-win-gold.pages.dev",
 ];
 
