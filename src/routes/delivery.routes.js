@@ -3,7 +3,7 @@ const authMiddleware = require("../middleware/auth.middleware");
 const roleMiddleware = require("../middleware/role.middleware");
 const deliveryController = require("../controllers/delivery.controller");
 const deliverySessionController = require("../controllers/deliverySession.controller");
-const deliveryDriverController = require("../controllers/deliveryDriver.controller");
+const deliveryCompanyPortalController = require("../controllers/deliveryCompanyPortal.controller");
 const User = require("../models/user");
 
 const router = express.Router();
@@ -36,15 +36,31 @@ router.post("/sessions/:sessionId/cancel", deliverySessionController.cancelSessi
 // Legacy alias
 router.post("/trips", authMiddleware, deliveryController.createTrip);
 
-// ── Driver operations ──
-router.use("/driver", authMiddleware, roleMiddleware(["driver"]), attachUserDoc);
-router.get("/driver/dashboard/stats", deliveryDriverController.getDashboardStats);
-router.get("/driver/trips", deliveryDriverController.listTrips);
-router.get("/driver/trips/:tripId", deliveryDriverController.getTrip);
-router.patch("/driver/trips/:tripId/accept", deliveryDriverController.acceptTrip);
-router.patch("/driver/trips/:tripId/stops/:orderId/collect", deliveryDriverController.collectStop);
-router.patch("/driver/trips/:tripId/verify-payment", deliveryDriverController.verifyPayment);
-router.patch("/driver/trips/:tripId/start", deliveryDriverController.startDelivery);
-router.patch("/driver/trips/:tripId/complete", deliveryDriverController.completeTrip);
+// ── Delivery company portal ──
+router.use("/company", authMiddleware, roleMiddleware(["delivery_company"]), attachUserDoc);
+router.get("/company/dashboard/stats", deliveryCompanyPortalController.getDashboardStats);
+router.get("/company/requests", deliveryCompanyPortalController.listRequests);
+router.get("/company/requests/:requestId", deliveryCompanyPortalController.getRequest);
+router.patch("/company/requests/:requestId/assign-driver", deliveryCompanyPortalController.assignDriver);
+router.patch("/company/requests/:requestId/reject", deliveryCompanyPortalController.rejectRequest);
+router.patch("/company/requests/:requestId/out-for-delivery", deliveryCompanyPortalController.markOutForDelivery);
+router.patch("/company/requests/:requestId/complete", deliveryCompanyPortalController.completeRequest);
+router.get("/company/profile", deliveryCompanyPortalController.getProfile);
+router.put("/company/profile", deliveryCompanyPortalController.updateProfile);
+router.get("/company/payment-settings", deliveryCompanyPortalController.getPaymentSettings);
+router.patch("/company/payment-methods", deliveryCompanyPortalController.updatePaymentMethods);
+router.get("/company/payment-accounts", deliveryCompanyPortalController.listPaymentAccounts);
+router.post("/company/payment-accounts", deliveryCompanyPortalController.createPaymentAccount);
+router.put("/company/payment-accounts/:accountId", deliveryCompanyPortalController.updatePaymentAccount);
+router.delete("/company/payment-accounts/:accountId", deliveryCompanyPortalController.deletePaymentAccount);
+router.get("/company/regions", deliveryCompanyPortalController.getRegions);
+router.put("/company/regions", deliveryCompanyPortalController.updateRegions);
+router.get("/company/pricing", deliveryCompanyPortalController.getPricing);
+router.put("/company/pricing", deliveryCompanyPortalController.updatePricing);
+router.get("/company/drivers", deliveryCompanyPortalController.listDrivers);
+router.post("/company/drivers", deliveryCompanyPortalController.createDriver);
+router.get("/company/drivers/:driverId", deliveryCompanyPortalController.getDriver);
+router.put("/company/drivers/:driverId", deliveryCompanyPortalController.updateDriver);
+router.delete("/company/drivers/:driverId", deliveryCompanyPortalController.deleteDriver);
 
 module.exports = router;

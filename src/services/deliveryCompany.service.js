@@ -114,10 +114,11 @@ function toAdminCompany(company, accounts = []) {
   };
 }
 
-function toCustomerCompany(company, accounts = []) {
+function toCustomerCompany(company, accounts = [], options = {}) {
   const plain = company.toObject ? company.toObject() : { ...company };
   const paymentSettings = buildPaymentSettingsFromAccounts(plain.paymentMethods, accounts);
   const enabledPaymentMethods = buildEnabledPaymentMethods(paymentSettings);
+  const servedRegionIds = (plain.servedRegionIds || []).map(String);
 
   return {
     id: plain.slug || String(plain._id),
@@ -131,11 +132,43 @@ function toCustomerCompany(company, accounts = []) {
     basePrice: plain.basePrice,
     extraOrderPrice: plain.extraOrderPrice,
     currency: plain.currency || "ILS",
-    servedRegionIds: (plain.servedRegionIds || []).map(String),
+    servedRegionIds,
     servesAllRegions: Boolean(plain.servesAllRegions),
     enabledPaymentMethods,
     paymentSettings,
+    isRecommended: Boolean(options.isRecommended),
+    recommendedForRegion: Boolean(options.recommendedForRegion),
   };
+}
+
+function isCompanyRecommendedForRegion(company, regionId) {
+  if (!regionId) return false;
+  if (company.servesAllRegions) return true;
+  const ids = (company.servedRegionIds || []).map(String);
+  return ids.includes(String(regionId));
+}
+
+/** Sort companies: recommended for region first, then by name. Never filters. */
+function sortCompaniesByRegionRecommendation(companies, regionId) {
+  if (!regionId) {
+    return companies.map((c) => toCustomerCompany(c.company || c, c.accounts || [], { isRecommended: false }));
+  }
+
+  const rid = String(regionId);
+  const ranked = companies.map((entry) => {
+    const company = entry.company || entry;
+    const accounts = entry.accounts || [];
+    const recommended = isCompanyRecommendedForRegion(company, rid);
+    return { company, accounts, recommended, sortName: (company.nameAr || company.name || "").toLowerCase() };
+  });
+
+  ranked.sort((a, b) => {
+    if (a.recommended !== b.recommended) return a.recommended ? -1 : 1;
+    return a.sortName.localeCompare(b.sortName, "ar");
+  });
+
+  return ranked.map(({ company, accounts, recommended }) =>
+    toCustomerCompany(company, accounts, { isRecommended: recommended, recommendedForRegion: recommended }));
 }
 
 async function loadCompanyWithAccounts(companyId) {
@@ -155,5 +188,7 @@ module.exports = {
   toAdminCompany,
   toCustomerCompany,
   loadCompanyWithAccounts,
+  isCompanyRecommendedForRegion,
+  sortCompaniesByRegionRecommendation,
   CUSTOMER_METHOD_IDS,
 };

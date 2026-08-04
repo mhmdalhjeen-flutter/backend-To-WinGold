@@ -114,10 +114,10 @@ const userSchema = new mongoose.Schema({
     },
     role: {
         type: String,
-        enum: ["customer", "store", "supplier", "admin", "driver"],
+        enum: ["customer", "store", "supplier", "admin", "delivery_company"],
         default: "customer",
     },
-    /** شركة التوصيل — للسائقين (role: driver) */
+    /** شركة التوصيل — لحسابات بوابة الشركة (role: delivery_company) */
     deliveryCompanyId: {
         type: mongoose.Schema.Types.ObjectId,
         ref: "DeliveryCompany",

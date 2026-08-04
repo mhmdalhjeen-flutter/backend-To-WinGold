@@ -1,65 +1,94 @@
-/** Canonical delivery session statuses */
+/** Canonical delivery session statuses — company-centric workflow */
 const SESSION_STATUSES = {
   WAITING: "waiting",
   WAITING_FOR_STORES: "waiting_for_stores",
   READY_FOR_PICKUP: "ready_for_pickup",
-  DRIVER_ASSIGNED: "driver_assigned",
-  COLLECTING_ORDERS: "collecting_orders",
-  ON_DELIVERY: "on_delivery",
+  ACCEPTED: "accepted",
+  OUT_FOR_DELIVERY: "out_for_delivery",
   COMPLETED: "completed",
+  REJECTED: "rejected",
   CANCELLED: "cancelled",
 };
 
 const SESSION_STATUS_VALUES = Object.values(SESSION_STATUSES);
 
-/** Legacy trip statuses kept for backward-compatible reads */
+/** Legacy driver-era statuses kept for backward-compatible reads */
 const LEGACY_STATUS_ALIASES = {
   waiting_for_acceptance: SESSION_STATUSES.READY_FOR_PICKUP,
-  accepted: SESSION_STATUSES.DRIVER_ASSIGNED,
-  on_the_way: SESSION_STATUSES.ON_DELIVERY,
+  driver_assigned: SESSION_STATUSES.ACCEPTED,
+  collecting_orders: SESSION_STATUSES.OUT_FOR_DELIVERY,
+  on_delivery: SESSION_STATUSES.OUT_FOR_DELIVERY,
+  on_the_way: SESSION_STATUSES.OUT_FOR_DELIVERY,
   delivered: SESSION_STATUSES.COMPLETED,
 };
 
 const SESSION_STATUS_LABELS = {
   [SESSION_STATUSES.WAITING]: "بانتظار التأكيد",
-  [SESSION_STATUSES.WAITING_FOR_STORES]: "بانتظار موافقة المتاجر",
-  [SESSION_STATUSES.READY_FOR_PICKUP]: "جاهز للاستلام",
-  [SESSION_STATUSES.DRIVER_ASSIGNED]: "تم تعيين السائق",
-  [SESSION_STATUSES.COLLECTING_ORDERS]: "جمع الطلبات",
-  [SESSION_STATUSES.ON_DELIVERY]: "في الطريق للزبون",
-  [SESSION_STATUSES.COMPLETED]: "مكتمل",
+  [SESSION_STATUSES.WAITING_FOR_STORES]: "بانتظار تأكيد المتجر",
+  [SESSION_STATUSES.READY_FOR_PICKUP]: "بانتظار شركة التوصيل",
+  [SESSION_STATUSES.ACCEPTED]: "مقبول من الشركة",
+  [SESSION_STATUSES.OUT_FOR_DELIVERY]: "قيد التوصيل",
+  [SESSION_STATUSES.COMPLETED]: "تم التسليم",
+  [SESSION_STATUSES.REJECTED]: "مرفوض",
   [SESSION_STATUSES.CANCELLED]: "ملغى",
 };
 
-const DRIVER_VISIBLE_STATUSES = new Set([
+/** Customer-facing labels for Orders page and notifications */
+const CUSTOMER_STATUS_LABELS = {
+  [SESSION_STATUSES.WAITING]: "بانتظار التأكيد",
+  [SESSION_STATUSES.WAITING_FOR_STORES]: "بانتظار تأكيد المتجر",
+  [SESSION_STATUSES.READY_FOR_PICKUP]: "بانتظار شركة التوصيل",
+  [SESSION_STATUSES.ACCEPTED]: "مقبول",
+  [SESSION_STATUSES.OUT_FOR_DELIVERY]: "قيد التوصيل",
+  [SESSION_STATUSES.COMPLETED]: "تم التسليم",
+  [SESSION_STATUSES.REJECTED]: "مرفوض",
+  [SESSION_STATUSES.CANCELLED]: "ملغى",
+};
+
+/** Company portal labels */
+const COMPANY_STATUS_LABELS = {
+  ...SESSION_STATUS_LABELS,
+  [SESSION_STATUSES.READY_FOR_PICKUP]: "طلب جديد — بانتظار القبول",
+  [SESSION_STATUSES.OUT_FOR_DELIVERY]: "طلبات مرسلة — قيد التوصيل",
+};
+
+const COMPANY_VISIBLE_STATUSES = new Set([
   SESSION_STATUSES.READY_FOR_PICKUP,
-  SESSION_STATUSES.DRIVER_ASSIGNED,
-  SESSION_STATUSES.COLLECTING_ORDERS,
-  SESSION_STATUSES.ON_DELIVERY,
+  SESSION_STATUSES.ACCEPTED,
+  SESSION_STATUSES.OUT_FOR_DELIVERY,
   SESSION_STATUSES.COMPLETED,
+  SESSION_STATUSES.REJECTED,
   SESSION_STATUSES.CANCELLED,
 ]);
 
-const NEW_DRIVER_REQUEST_STATUSES = new Set([SESSION_STATUSES.READY_FOR_PICKUP]);
+const NEW_COMPANY_REQUEST_STATUSES = new Set([SESSION_STATUSES.READY_FOR_PICKUP, "waiting_for_acceptance"]);
 
-const ACTIVE_DRIVER_STATUSES = new Set([
-  SESSION_STATUSES.DRIVER_ASSIGNED,
-  SESSION_STATUSES.COLLECTING_ORDERS,
-  SESSION_STATUSES.ON_DELIVERY,
+const ACCEPTED_COMPANY_STATUSES = new Set([SESSION_STATUSES.ACCEPTED, "driver_assigned"]);
+
+const OUT_FOR_DELIVERY_STATUSES = new Set([
+  SESSION_STATUSES.OUT_FOR_DELIVERY,
+  "collecting_orders",
+  "on_delivery",
+  "on_the_way",
 ]);
 
-const COMPLETED_SESSION_STATUSES = new Set([
+const DELIVERED_SESSION_STATUSES = new Set([SESSION_STATUSES.COMPLETED, "delivered"]);
+
+const REJECTED_SESSION_STATUSES = new Set([SESSION_STATUSES.REJECTED]);
+
+const TERMINAL_SESSION_STATUSES = new Set([
   SESSION_STATUSES.COMPLETED,
+  SESSION_STATUSES.REJECTED,
   SESSION_STATUSES.CANCELLED,
+  "delivered",
 ]);
 
 const CUSTOMER_ACTIVE_STATUSES = new Set([
   SESSION_STATUSES.WAITING,
   SESSION_STATUSES.WAITING_FOR_STORES,
   SESSION_STATUSES.READY_FOR_PICKUP,
-  SESSION_STATUSES.DRIVER_ASSIGNED,
-  SESSION_STATUSES.COLLECTING_ORDERS,
-  SESSION_STATUSES.ON_DELIVERY,
+  SESSION_STATUSES.ACCEPTED,
+  SESSION_STATUSES.OUT_FOR_DELIVERY,
 ]);
 
 /** Store order statuses that count as approved for delivery readiness */
@@ -124,15 +153,33 @@ function deriveInitialSubmittedStatus(stops = []) {
     : SESSION_STATUSES.WAITING_FOR_STORES;
 }
 
+const SENT_ORDER_STATUSES = OUT_FOR_DELIVERY_STATUSES;
+
+function getCustomerStatusLabel(status) {
+  const normalized = normalizeSessionStatus(status);
+  return CUSTOMER_STATUS_LABELS[normalized] || SESSION_STATUS_LABELS[normalized] || normalized;
+}
+
+function getCompanyStatusLabel(status) {
+  const normalized = normalizeSessionStatus(status);
+  return COMPANY_STATUS_LABELS[normalized] || SESSION_STATUS_LABELS[normalized] || normalized;
+}
+
 module.exports = {
   SESSION_STATUSES,
   SESSION_STATUS_VALUES,
   LEGACY_STATUS_ALIASES,
   SESSION_STATUS_LABELS,
-  DRIVER_VISIBLE_STATUSES,
-  NEW_DRIVER_REQUEST_STATUSES,
-  ACTIVE_DRIVER_STATUSES,
-  COMPLETED_SESSION_STATUSES,
+  CUSTOMER_STATUS_LABELS,
+  COMPANY_STATUS_LABELS,
+  COMPANY_VISIBLE_STATUSES,
+  NEW_COMPANY_REQUEST_STATUSES,
+  ACCEPTED_COMPANY_STATUSES,
+  OUT_FOR_DELIVERY_STATUSES,
+  SENT_ORDER_STATUSES,
+  DELIVERED_SESSION_STATUSES,
+  REJECTED_SESSION_STATUSES,
+  TERMINAL_SESSION_STATUSES,
   CUSTOMER_ACTIVE_STATUSES,
   STORE_APPROVED_STATUSES,
   STORE_READY_FOR_COLLECTION_STATUSES,
@@ -140,6 +187,8 @@ module.exports = {
   COLLECTION_STATUS_LABELS,
   PAYMENT_STATUSES,
   normalizeSessionStatus,
+  getCustomerStatusLabel,
+  getCompanyStatusLabel,
   isStoreApprovedForSession,
   allStoresApproved,
   deriveInitialSubmittedStatus,

@@ -7,9 +7,16 @@ const { DELIVERY_METHODS } = require("../constants/marketplaceOrder.constants");
 const {
   SESSION_STATUSES,
   SESSION_STATUS_LABELS,
-  NEW_DRIVER_REQUEST_STATUSES,
-  ACTIVE_DRIVER_STATUSES,
-  COMPLETED_SESSION_STATUSES,
+  CUSTOMER_STATUS_LABELS,
+  getCustomerStatusLabel,
+  getCompanyStatusLabel,
+  NEW_COMPANY_REQUEST_STATUSES,
+  ACCEPTED_COMPANY_STATUSES,
+  OUT_FOR_DELIVERY_STATUSES,
+  SENT_ORDER_STATUSES,
+  DELIVERED_SESSION_STATUSES,
+  REJECTED_SESSION_STATUSES,
+  TERMINAL_SESSION_STATUSES,
   CUSTOMER_ACTIVE_STATUSES,
   STORE_STOP_LABELS,
   COLLECTION_STATUS_LABELS,
@@ -20,6 +27,7 @@ const {
 } = require("../constants/deliverySession.constants");
 const deliveryPricingService = require("./deliveryPricing.service");
 const deliveryNotificationService = require("./deliveryNotification.service");
+const deliveryCompanyDriverService = require("./deliveryCompanyDriver.service");
 const { requireObjectId, cleanString } = require("../utils/inputSecurity.util");
 const { processOptionalImage } = require("../utils/imageProcess.util");
 const { safeLog } = require("../utils/logSanitize.util");
@@ -122,11 +130,28 @@ function formatSessionSummary(session) {
   const plain = session.toObject ? session.toObject() : { ...session };
   const status = normalizeSessionStatus(plain.status);
   const storeCount = new Set((plain.storeStops || []).map((s) => String(s.store))).size;
+  const assigned = plain.assignedDriver || null;
+  const orderNumbers = (plain.storeStops || []).map((s) => s.orderNumber).filter(Boolean);
+  const orderNumber = orderNumbers.length === 1
+    ? orderNumbers[0]
+    : orderNumbers.length > 1
+      ? orderNumbers.join(" · ")
+      : `#${String(plain._id || "").slice(-6)}`;
+  const timeline = plain.statusTimeline || [];
+  const lastTimeline = timeline[timeline.length - 1];
+  const lastUpdatedAt = lastTimeline?.at || plain.updatedAt || plain.createdAt;
+  const rejectionReason = plain.rejectionReason
+    || (status === SESSION_STATUSES.REJECTED ? lastTimeline?.note || "" : "");
 
   return {
     ...plain,
     status,
-    statusLabel: SESSION_STATUS_LABELS[status] || status,
+    statusLabel: getCompanyStatusLabel(status),
+    customerStatusLabel: getCustomerStatusLabel(status),
+    orderNumber,
+    lastUpdatedAt,
+    rejectionReason,
+    internalNote: assigned?.note || "",
     storeCount,
     orderCount: plain.orders?.length || plain.storeStops?.length || 0,
     deliveryFee: plain.deliveryFee ?? plain.feeBreakdown?.totalFee ?? 0,
@@ -135,6 +160,11 @@ function formatSessionSummary(session) {
     paymentVerified: plain.payment?.verified ?? plain.paymentVerified,
     paymentProof: plain.payment?.receiptImage || plain.paymentProof,
     transferInformation: plain.payment?.transferDetails || plain.transferInformation,
+    assignedDriver: assigned,
+    driverName: assigned?.name || "",
+    driverPhone: assigned?.phone || "",
+    driverWhatsapp: assigned?.whatsapp || assigned?.phone || "",
+    driverNote: assigned?.note || "",
   };
 }
 
@@ -343,51 +373,65 @@ async function syncOrderInSessions(orderId) {
   });
 }
 
-async function assertDriverCompany(driver) {
-  if (!driver?.deliveryCompanyId) {
-    const err = new Error("حساب السائق غير مربوط بشركة توصيل");
+async function assertCompanyUser(user) {
+  if (!user?.deliveryCompanyId) {
+    const err = new Error("حساب الشركة غير مربوط بشركة توصيل");
     err.status = 403;
     throw err;
   }
-  return driver.deliveryCompanyId;
+  return user.deliveryCompanyId;
 }
 
-async function getDashboardStats(driver) {
-  const companyId = await assertDriverCompany(driver);
+async function getDashboardStats(user) {
+  const companyId = await assertCompanyUser(user);
   const baseQuery = { deliveryCompany: companyId };
 
-  const readyStatuses = [...NEW_DRIVER_REQUEST_STATUSES, "waiting_for_acceptance"];
-  const activeStatuses = [...ACTIVE_DRIVER_STATUSES, "accepted", "collecting_orders", "on_the_way"];
-  const completedStatuses = [SESSION_STATUSES.COMPLETED, "delivered"];
+  const newStatuses = [...NEW_COMPANY_REQUEST_STATUSES];
+  const sentStatuses = [...SENT_ORDER_STATUSES];
+  const deliveredStatuses = [...DELIVERED_SESSION_STATUSES];
+  const rejectedStatuses = [...REJECTED_SESSION_STATUSES];
 
-  const [newTrips, activeTrips, completedTrips, activeTripDocs] = await Promise.all([
-    DeliverySession.countDocuments({ ...baseQuery, status: { $in: readyStatuses } }),
-    DeliverySession.countDocuments({ ...baseQuery, status: { $in: activeStatuses } }),
-    DeliverySession.countDocuments({ ...baseQuery, status: { $in: completedStatuses } }),
-    DeliverySession.find({ ...baseQuery, status: { $in: activeStatuses } }).select("storeStops").lean(),
+  const [pendingConfirmation, sentOrders, delivered, rejected] = await Promise.all([
+    DeliverySession.countDocuments({ ...baseQuery, status: { $in: newStatuses } }),
+    DeliverySession.countDocuments({ ...baseQuery, status: { $in: sentStatuses } }),
+    DeliverySession.countDocuments({ ...baseQuery, status: { $in: deliveredStatuses } }),
+    DeliverySession.countDocuments({ ...baseQuery, status: { $in: rejectedStatuses } }),
   ]);
 
-  let pendingOrders = 0;
-  activeTripDocs.forEach((trip) => {
-    (trip.storeStops || []).forEach((stop) => {
-      if (stop.collectionStatus === "pending") pendingOrders += 1;
-    });
-  });
-
-  return { newTrips, activeTrips, completedTrips, pendingOrders };
+  return {
+    pendingConfirmation,
+    sentOrders,
+    delivered,
+    rejected,
+    // legacy aliases for older clients
+    newRequests: pendingConfirmation,
+    outForDelivery: sentOrders,
+  };
 }
 
-async function listSessionsForDriver(driver, { status, history = false } = {}) {
-  const companyId = await assertDriverCompany(driver);
+async function listSessionsForCompany(user, { status, history = false } = {}) {
+  const companyId = await assertCompanyUser(user);
   const query = { deliveryCompany: companyId };
 
   if (history) {
-    query.status = { $in: [...COMPLETED_SESSION_STATUSES, SESSION_STATUSES.CANCELLED, "delivered", "cancelled"] };
+    query.status = {
+      $in: [...TERMINAL_SESSION_STATUSES],
+    };
+  } else if (status === "new") {
+    query.status = { $in: [...NEW_COMPANY_REQUEST_STATUSES] };
+  } else if (status === "sent" || status === "out_for_delivery") {
+    query.status = { $in: [...SENT_ORDER_STATUSES] };
+  } else if (status === "accepted") {
+    query.status = { $in: [...ACCEPTED_COMPANY_STATUSES] };
+  } else if (status === "delivered") {
+    query.status = { $in: [...DELIVERED_SESSION_STATUSES] };
+  } else if (status === "rejected") {
+    query.status = { $in: [...REJECTED_SESSION_STATUSES] };
   } else if (status) {
     query.status = status;
   } else {
     query.status = {
-      $nin: [...COMPLETED_SESSION_STATUSES, SESSION_STATUSES.CANCELLED, "delivered", "cancelled", SESSION_STATUSES.WAITING, SESSION_STATUSES.WAITING_FOR_STORES],
+      $nin: [SESSION_STATUSES.WAITING, SESSION_STATUSES.WAITING_FOR_STORES],
     };
   }
 
@@ -395,148 +439,137 @@ async function listSessionsForDriver(driver, { status, history = false } = {}) {
   return sessions.map(formatSessionSummary);
 }
 
-async function getSessionForDriver(driver, sessionId) {
-  const companyId = await assertDriverCompany(driver);
+async function getSessionForCompany(user, sessionId) {
+  const companyId = await assertCompanyUser(user);
   const id = requireObjectId(sessionId, "sessionId");
   const session = await DeliverySession.findOne({ _id: id, deliveryCompany: companyId }).lean();
   if (!session) {
-    const err = new Error("رحلة التوصيل غير موجودة");
+    const err = new Error("طلب التوصيل غير موجود");
     err.status = 404;
     throw err;
   }
   return formatSessionDetails(await refreshStoreStopsFromOrders(session));
 }
 
-async function acceptSession(driver, sessionId) {
-  const preview = await getSessionForDriver(driver, sessionId);
+async function assignDriverToSession(user, sessionId, { driverId, note = "" } = {}) {
+  const preview = await getSessionForCompany(user, sessionId);
   const normalized = normalizeSessionStatus(preview.status);
-  const acceptable = new Set([SESSION_STATUSES.READY_FOR_PICKUP, "waiting_for_acceptance"]);
-  if (!acceptable.has(normalized) && !acceptable.has(preview.status)) {
-    const err = new Error("لا يمكن قبول هذه الرحلة");
+  const assignable = new Set([
+    ...NEW_COMPANY_REQUEST_STATUSES,
+    ...ACCEPTED_COMPANY_STATUSES,
+    SESSION_STATUSES.READY_FOR_PICKUP,
+    SESSION_STATUSES.ACCEPTED,
+  ]);
+  if (!assignable.has(normalized) && !assignable.has(preview.status)) {
+    const err = new Error("لا يمكن تعيين سائق لهذا الطلب");
+    err.status = 400;
+    throw err;
+  }
+
+  const driver = await deliveryCompanyDriverService.assertDriverForCompany(user, driverId, { requireActive: true });
+  const assignmentNote = cleanString(note, { field: "note", max: 500 });
+
+  const doc = await DeliverySession.findById(preview._id);
+  const previousStatus = normalizeSessionStatus(doc.status);
+  doc.driver = null;
+  doc.assignedDriver = {
+    driverId: driver._id,
+    name: driver.name,
+    phone: driver.phone,
+    whatsapp: driver.whatsapp || driver.phone,
+    note: assignmentNote,
+    assignedAt: new Date(),
+  };
+  doc.status = SESSION_STATUSES.OUT_FOR_DELIVERY;
+  const timelineNote = assignmentNote
+    ? `تعيين السائق ${driver.name} — ${assignmentNote}`
+    : `تعيين السائق ${driver.name}`;
+  pushTimeline(doc, SESSION_STATUSES.OUT_FOR_DELIVERY, timelineNote);
+  await doc.save();
+
+  const formatted = formatSessionDetails(doc);
+  setImmediate(() => {
+    deliveryNotificationService.dispatchStatusChange(previousStatus, formatted, {
+      driverName: driver.name,
+      driverPhone: driver.phone,
+      driverWhatsapp: driver.whatsapp || driver.phone,
+    }).catch(() => {});
+  });
+  return formatted;
+}
+
+async function rejectSession(user, sessionId, reason = "") {
+  const preview = await getSessionForCompany(user, sessionId);
+  const normalized = normalizeSessionStatus(preview.status);
+  const rejectable = new Set([...NEW_COMPANY_REQUEST_STATUSES, SESSION_STATUSES.READY_FOR_PICKUP]);
+  if (!rejectable.has(normalized) && !rejectable.has(preview.status)) {
+    const err = new Error("لا يمكن رفض هذا الطلب في حالته الحالية");
     err.status = 400;
     throw err;
   }
 
   const doc = await DeliverySession.findById(preview._id);
   const previousStatus = normalizeSessionStatus(doc.status);
-  doc.driver = driver._id || driver.id;
-  doc.status = SESSION_STATUSES.DRIVER_ASSIGNED;
-  pushTimeline(doc, SESSION_STATUSES.DRIVER_ASSIGNED, "قبل السائق الرحلة");
+  const note = cleanString(reason, { field: "reason", max: 500 }) || "رفضت شركة التوصيل الطلب";
+  doc.status = SESSION_STATUSES.REJECTED;
+  doc.rejectionReason = note;
+  pushTimeline(doc, SESSION_STATUSES.REJECTED, note);
   await doc.save();
+
+  await Order.updateMany(
+    { _id: { $in: doc.orders || [] }, deliveryGroup: doc._id },
+    { $unset: { deliveryGroup: 1 } },
+  );
 
   const formatted = formatSessionDetails(doc);
   setImmediate(() => {
-    deliveryNotificationService.dispatchStatusChange(previousStatus, formatted, {
-      driverName: driver.name || "",
-    }).catch(() => {});
+    deliveryNotificationService.dispatchStatusChange(previousStatus, formatted, { rejectReason: note }).catch(() => {});
   });
   return formatted;
 }
 
-async function collectStoreStop(driver, sessionId, orderId) {
+async function markOutForDelivery(user, sessionId) {
   const doc = await DeliverySession.findById(requireObjectId(sessionId, "sessionId"));
-  await assertDriverCompany(driver);
-  if (!doc || String(doc.deliveryCompany) !== String(driver.deliveryCompanyId)) {
-    const err = new Error("رحلة التوصيل غير موجودة");
-    err.status = 404;
-    throw err;
-  }
-
-  const allowed = new Set([
-    SESSION_STATUSES.DRIVER_ASSIGNED,
-    SESSION_STATUSES.COLLECTING_ORDERS,
-    "accepted",
-  ]);
-  if (!allowed.has(normalizeSessionStatus(doc.status)) && !allowed.has(doc.status)) {
-    const err = new Error("لا يمكن استلام الطلبات في هذه المرحلة");
-    err.status = 400;
-    throw err;
-  }
-
-  const oid = String(requireObjectId(orderId, "orderId"));
-  const stop = (doc.storeStops || []).find((s) => String(s.order) === oid);
-  if (!stop) {
-    const err = new Error("الطلب غير موجود في الرحلة");
-    err.status = 404;
-    throw err;
-  }
-  if (stop.collectionStatus === "collected") return formatSessionDetails(doc);
-
-  const previousStatus = normalizeSessionStatus(doc.status);
-  stop.collectionStatus = "collected";
-  stop.collectedAt = new Date();
-  doc.status = SESSION_STATUSES.COLLECTING_ORDERS;
-  pushTimeline(doc, SESSION_STATUSES.COLLECTING_ORDERS, `تم استلام طلب من ${stop.storeName || "متجر"}`);
-  doc.markModified("storeStops");
-  await doc.save();
-
-  const formatted = formatSessionDetails(doc);
-  setImmediate(() => {
-    deliveryNotificationService.dispatchStatusChange(previousStatus, formatted).catch(() => {});
-  });
-  return formatted;
-}
-
-async function verifySessionPayment(driver, sessionId) {
-  const doc = await DeliverySession.findById(requireObjectId(sessionId, "sessionId"));
-  await assertDriverCompany(driver);
-  if (!doc || String(doc.deliveryCompany) !== String(driver.deliveryCompanyId)) {
-    const err = new Error("رحلة التوصيل غير موجودة");
-    err.status = 404;
-    throw err;
-  }
-
-  doc.payment = doc.payment || {};
-  doc.payment.verified = true;
-  doc.payment.verifiedAt = new Date();
-  doc.payment.status = PAYMENT_STATUSES.VERIFIED;
-  doc.paymentVerified = true;
-  doc.paymentVerifiedAt = doc.payment.verifiedAt;
-  doc.paymentStatus = PAYMENT_STATUSES.VERIFIED;
-  await doc.save();
-  return formatSessionDetails(doc);
-}
-
-async function startDelivery(driver, sessionId) {
-  const doc = await DeliverySession.findById(requireObjectId(sessionId, "sessionId"));
-  await assertDriverCompany(driver);
-  if (!doc || String(doc.deliveryCompany) !== String(driver.deliveryCompanyId)) {
-    const err = new Error("رحلة التوصيل غير موجودة");
-    err.status = 404;
-    throw err;
-  }
-
-  const allCollected = (doc.storeStops || []).every((s) => s.collectionStatus === "collected");
-  if (!allCollected) {
-    const err = new Error("يجب استلام جميع الطلبات من المتاجر أولاً");
-    err.status = 400;
-    throw err;
-  }
-
-  const previousStatus = normalizeSessionStatus(doc.status);
-  doc.status = SESSION_STATUSES.ON_DELIVERY;
-  pushTimeline(doc, SESSION_STATUSES.ON_DELIVERY, "بدء التوصيل للزبون");
-  await doc.save();
-
-  const formatted = formatSessionDetails(doc);
-  setImmediate(() => {
-    deliveryNotificationService.dispatchStatusChange(previousStatus, formatted).catch(() => {});
-  });
-  return formatted;
-}
-
-async function completeSession(driver, sessionId) {
-  const doc = await DeliverySession.findById(requireObjectId(sessionId, "sessionId"));
-  await assertDriverCompany(driver);
-  if (!doc || String(doc.deliveryCompany) !== String(driver.deliveryCompanyId)) {
-    const err = new Error("رحلة التوصيل غير موجودة");
+  await assertCompanyUser(user);
+  if (!doc || String(doc.deliveryCompany) !== String(user.deliveryCompanyId)) {
+    const err = new Error("طلب التوصيل غير موجود");
     err.status = 404;
     throw err;
   }
 
   const current = normalizeSessionStatus(doc.status);
-  if (current !== SESSION_STATUSES.ON_DELIVERY && doc.status !== "on_the_way") {
-    const err = new Error("يجب بدء التوصيل قبل الإكمال");
+  const allowed = new Set([...ACCEPTED_COMPANY_STATUSES, SESSION_STATUSES.ACCEPTED]);
+  if (!allowed.has(current) && !allowed.has(doc.status)) {
+    const err = new Error("يجب قبول الطلب قبل تحديده كقيد التوصيل");
+    err.status = 400;
+    throw err;
+  }
+
+  const previousStatus = current;
+  doc.status = SESSION_STATUSES.OUT_FOR_DELIVERY;
+  pushTimeline(doc, SESSION_STATUSES.OUT_FOR_DELIVERY, "الطلب قيد التوصيل");
+  await doc.save();
+
+  const formatted = formatSessionDetails(doc);
+  setImmediate(() => {
+    deliveryNotificationService.dispatchStatusChange(previousStatus, formatted).catch(() => {});
+  });
+  return formatted;
+}
+
+async function completeSession(user, sessionId) {
+  const doc = await DeliverySession.findById(requireObjectId(sessionId, "sessionId"));
+  await assertCompanyUser(user);
+  if (!doc || String(doc.deliveryCompany) !== String(user.deliveryCompanyId)) {
+    const err = new Error("طلب التوصيل غير موجود");
+    err.status = 404;
+    throw err;
+  }
+
+  const current = normalizeSessionStatus(doc.status);
+  const allowed = new Set([...OUT_FOR_DELIVERY_STATUSES, SESSION_STATUSES.OUT_FOR_DELIVERY]);
+  if (!allowed.has(current) && !allowed.has(doc.status)) {
+    const err = new Error("يجب أن يكون الطلب قيد التوصيل قبل تأكيد التسليم");
     err.status = 400;
     throw err;
   }
@@ -595,12 +628,11 @@ module.exports = {
   syncOrderInSessions,
   cancelSession,
   getDashboardStats,
-  listSessionsForDriver,
-  getSessionForDriver,
-  acceptSession,
-  collectStoreStop,
-  verifySessionPayment,
-  startDelivery,
+  listSessionsForCompany,
+  getSessionForCompany,
+  assignDriverToSession,
+  rejectSession,
+  markOutForDelivery,
   completeSession,
   formatSessionSummary,
   formatSessionDetails,

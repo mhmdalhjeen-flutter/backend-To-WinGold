@@ -411,17 +411,17 @@ const login = async (req, res) => {
         });
       }
 
-      if (appType === "delivery" && user.role !== "driver") {
-        await logAttempt(false, "دور غير متطابق — تطبيق التوصيل", user);
+      if (appType === "delivery" && user.role !== "delivery_company") {
+        await logAttempt(false, "دور غير متطابق — بوابة شركة التوصيل", user);
         return res.status(403).json({
-          message: "هذا الحساب غير مخصص لتطبيق التوصيل"
+          message: "هذا الحساب غير مخصص لبوابة شركة التوصيل"
         });
       }
 
       if (appType === "delivery" && !user.deliveryCompanyId) {
-        await logAttempt(false, "سائق غير مربوط بشركة", user);
+        await logAttempt(false, "شركة غير مربوطة", user);
         return res.status(403).json({
-          message: "حساب السائق غير مربوط بشركة توصيل — تواصل مع الإدارة"
+          message: "حساب الشركة غير مربوط بشركة توصيل — تواصل مع الإدارة"
         });
       }
     }

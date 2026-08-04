@@ -1,5 +1,7 @@
 const DeliveryCompany = require("../../models/deliveryCompany");
 const DeliveryCompanyPaymentAccount = require("../../models/deliveryCompanyPaymentAccount");
+const User = require("../../models/user");
+const bcrypt = require("bcryptjs");
 const {
   ensureUniqueSlug,
   deactivateAccountSiblings,
@@ -16,6 +18,124 @@ const {
 const { processOptionalImage } = require("../../utils/imageProcess.util");
 const { normalizePaymentType, isValidPaymentType } = require("../../utils/paymentMethodTypes.util");
 
+const { normalizeLocalPhone } = require("../../utils/phone.util");
+const { cleanAuthPassword } = require("../../utils/authValidation.util");
+
+function toPortalAccountSummary(user) {
+  if (!user) return null;
+  const plain = user.toObject ? user.toObject() : user;
+  return {
+    _id: plain._id,
+    name: plain.name,
+    email: plain.email || "",
+    phone: plain.phone || "",
+    identifier: plain.email || plain.phone || "",
+    isActive: plain.status === "active",
+    status: plain.status,
+  };
+}
+
+function parsePortalIdentifier(identifier) {
+  const clean = cleanString(identifier, { field: "identifier", max: 120, required: true });
+  if (clean.includes("@")) {
+    return { email: clean.toLowerCase(), phone: undefined };
+  }
+  return { email: undefined, phone: normalizeLocalPhone(clean) };
+}
+
+async function assertPortalIdentifierAvailable({ email, phone }, exceptUserId = null) {
+  const or = [
+    email ? { email } : null,
+    phone ? { phone } : null,
+  ].filter(Boolean);
+  if (!or.length) {
+    const err = new Error("أدخل بريداً إلكترونياً أو رقم هاتف صالحاً");
+    err.status = 400;
+    throw err;
+  }
+
+  const query = { $or: or };
+  if (exceptUserId) query._id = { $ne: exceptUserId };
+
+  const existing = await User.findOne(query);
+  if (existing) {
+    const err = new Error("رقم الهاتف أو البريد مستخدم مسبقاً");
+    err.status = 400;
+    throw err;
+  }
+}
+
+async function createPortalUserForCompany(company, portalAccount = {}) {
+  assertNoMongoOperators(portalAccount, "portalAccount");
+  const password = cleanAuthPassword(portalAccount.password);
+  const { email, phone } = parsePortalIdentifier(portalAccount.identifier);
+  await assertPortalIdentifierAvailable({ email, phone });
+
+  const existingPortal = await User.findOne({
+    role: "delivery_company",
+    deliveryCompanyId: company._id,
+  });
+  if (existingPortal) {
+    const err = new Error("يوجد حساب بوابة لهذه الشركة مسبقاً");
+    err.status = 400;
+    throw err;
+  }
+
+  const name = cleanString(portalAccount.name || company.name, { field: "name", max: 120, required: true });
+  const isActive = portalAccount.isActive !== false;
+  const hashedPassword = await bcrypt.hash(password, 10);
+
+  return User.create({
+    name,
+    phone,
+    email,
+    password: hashedPassword,
+    role: "delivery_company",
+    deliveryCompanyId: company._id,
+    status: isActive ? "active" : "suspended",
+  });
+}
+
+async function updatePortalUserForCompany(company, portalAccount = {}) {
+  assertNoMongoOperators(portalAccount, "portalAccount");
+
+  let user = await User.findOne({
+    role: "delivery_company",
+    deliveryCompanyId: company._id,
+  });
+
+  if (!user) {
+    if (!portalAccount.identifier || !portalAccount.password) {
+      const err = new Error("يجب إدخال بيانات حساب الدخول");
+      err.status = 400;
+      throw err;
+    }
+    return createPortalUserForCompany(company, portalAccount);
+  }
+
+  if (portalAccount.identifier !== undefined) {
+    const { email, phone } = parsePortalIdentifier(portalAccount.identifier);
+    await assertPortalIdentifierAvailable({ email, phone }, user._id);
+    user.email = email;
+    user.phone = phone;
+  }
+
+  if (portalAccount.password) {
+    user.password = await bcrypt.hash(cleanAuthPassword(portalAccount.password), 10);
+  }
+
+  if (portalAccount.isActive !== undefined) {
+    user.status = portalAccount.isActive ? "active" : "suspended";
+  }
+
+  if (portalAccount.name) {
+    user.name = cleanString(portalAccount.name, { field: "name", max: 120, required: true });
+  }
+
+  await user.save();
+  return user;
+}
+
 async function listCompaniesWithAccounts() {
   const companies = await DeliveryCompany.find({ deletedAt: null })
     .sort({ createdAt: -1 })
@@ -27,6 +147,13 @@ async function listCompaniesWithAccounts() {
     .sort({ type: 1, isActive: -1, createdAt: -1 })
     .lean();
 
+  const portalUsers = await User.find({
+    role: "delivery_company",
+    deliveryCompanyId: { $in: ids },
+  })
+    .select("name email phone status deliveryCompanyId")
+    .lean();
+
   const byCompany = accounts.reduce((acc, row) => {
     const key = String(row.deliveryCompany);
     if (!acc[key]) acc[key] = [];
@@ -34,7 +161,15 @@ async function listCompaniesWithAccounts() {
     return acc;
   }, {});
 
-  return companies.map((company) => toAdminCompany(company, byCompany[String(company._id)] || []));
+  const portalByCompany = portalUsers.reduce((acc, user) => {
+    acc[String(user.deliveryCompanyId)] = user;
+    return acc;
+  }, {});
+
+  return companies.map((company) => ({
+    ...toAdminCompany(company, byCompany[String(company._id)] || []),
+    portalAccount: toPortalAccountSummary(portalByCompany[String(company._id)]),
+  }));
 }
 
 function applyPaymentMethods(company, paymentMethods = {}) {
@@ -86,10 +221,39 @@ exports.create = async (req, res) => {
       currency: cleanString(req.body.currency || "ILS", { field: "currency", max: 8 }),
       isActive: req.body.isActive !== false,
       servesAllRegions: Boolean(req.body.servesAllRegions),
-      servedRegionIds: [],
+      servedRegionIds: req.body.servesAllRegions
+        ? []
+        : (Array.isArray(req.body.servedRegionIds) ? req.body.servedRegionIds : [])
+          .map((regionId) => requireObjectId(regionId, "servedRegionIds")),
     });
 
-    res.status(201).json({ company: toAdminCompany(company, []) });
+    applyPaymentMethods(company, req.body.paymentMethods || {});
+    await company.save();
+
+    if (!req.body.portalAccount?.identifier || !req.body.portalAccount?.password) {
+      await DeliveryCompany.findByIdAndDelete(company._id);
+      return res.status(400).json({ message: "يجب إنشاء حساب دخول للشركة (البريد/الهاتف وكلمة المرور)" });
+    }
+
+    try {
+      await createPortalUserForCompany(company, req.body.portalAccount);
+    } catch (portalErr) {
+      await DeliveryCompany.findByIdAndDelete(company._id);
+      throw portalErr;
+    }
+
+    const accounts = await listPaymentAccounts(company._id);
+    const portalUser = await User.findOne({
+      role: "delivery_company",
+      deliveryCompanyId: company._id,
+    }).select("name email phone status deliveryCompanyId");
+
+    res.status(201).json({
+      company: {
+        ...toAdminCompany(company, accounts),
+        portalAccount: toPortalAccountSummary(portalUser),
+      },
+    });
   } catch (err) {
     res.status(err.status || 400).json({ message: err.message });
   }
@@ -147,9 +311,39 @@ exports.update = async (req, res) => {
       company.isActive = Boolean(req.body.isActive);
     }
 
+    if (req.body.servesAllRegions !== undefined) {
+      company.servesAllRegions = Boolean(req.body.servesAllRegions);
+      if (company.servesAllRegions) {
+        company.servedRegionIds = [];
+      } else if (Array.isArray(req.body.servedRegionIds)) {
+        company.servedRegionIds = req.body.servedRegionIds.map((regionId) => requireObjectId(regionId, "servedRegionIds"));
+      }
+    } else if (Array.isArray(req.body.servedRegionIds)) {
+      company.servedRegionIds = req.body.servedRegionIds.map((regionId) => requireObjectId(regionId, "servedRegionIds"));
+    }
+
+    if (req.body.paymentMethods !== undefined) {
+      applyPaymentMethods(company, req.body.paymentMethods);
+    }
+
     await company.save();
+
+    if (req.body.portalAccount) {
+      await updatePortalUserForCompany(company, req.body.portalAccount);
+    }
+
     const accounts = await listPaymentAccounts(company._id);
-    res.json({ company: toAdminCompany(company, accounts) });
+    const portalUser = await User.findOne({
+      role: "delivery_company",
+      deliveryCompanyId: company._id,
+    }).select("name email phone status deliveryCompanyId");
+
+    res.json({
+      company: {
+        ...toAdminCompany(company, accounts),
+        portalAccount: toPortalAccountSummary(portalUser),
+      },
+    });
   } catch (err) {
     res.status(err.status || 400).json({ message: err.message });
   }
@@ -346,5 +540,51 @@ exports.deletePaymentAccount = async (req, res) => {
     res.json({ message: "تم حذف الحساب" });
   } catch (err) {
     res.status(err.status || 500).json({ message: err.message });
+  }
+};
+
+exports.createPortalAccount = async (req, res) => {
+  try {
+    assertNoMongoOperators(req.body, "portalAccount");
+    const companyId = requireObjectId(req.params.id, "id");
+    const company = await DeliveryCompany.findOne({ _id: companyId, deletedAt: null });
+    if (!company) return res.status(404).json({ message: "شركة التوصيل غير موجودة" });
+
+    const user = await createPortalUserForCompany(company, {
+      identifier: req.body.identifier || req.body.email || req.body.phone,
+      password: req.body.password,
+      name: req.body.name,
+      isActive: req.body.isActive,
+    });
+
+    res.status(201).json({
+      message: "تم إنشاء حساب بوابة الشركة",
+      portalAccount: toPortalAccountSummary(user),
+    });
+  } catch (err) {
+    res.status(err.status || 400).json({ message: err.message });
+  }
+};
+
+exports.updatePortalAccount = async (req, res) => {
+  try {
+    assertNoMongoOperators(req.body, "portalAccount");
+    const companyId = requireObjectId(req.params.id, "id");
+    const company = await DeliveryCompany.findOne({ _id: companyId, deletedAt: null });
+    if (!company) return res.status(404).json({ message: "شركة التوصيل غير موجودة" });
+
+    const user = await updatePortalUserForCompany(company, {
+      identifier: req.body.identifier || req.body.email || req.body.phone,
+      password: req.body.password,
+      name: req.body.name,
+      isActive: req.body.isActive,
+    });
+
+    res.json({
+      message: "تم تحديث حساب البوابة",
+      portalAccount: toPortalAccountSummary(user),
+    });
+  } catch (err) {
+    res.status(err.status || 400).json({ message: err.message });
   }
 };

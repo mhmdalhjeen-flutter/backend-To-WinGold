@@ -480,5 +480,7 @@ router.get("/delivery-companies/:id/payment-accounts", deliveryCompanyAdmin.list
 router.post("/delivery-companies/:id/payment-accounts", deliveryCompanyAdmin.createPaymentAccount);
 router.put("/delivery-companies/:id/payment-accounts/:accountId", deliveryCompanyAdmin.updatePaymentAccount);
 router.delete("/delivery-companies/:id/payment-accounts/:accountId", deliveryCompanyAdmin.deletePaymentAccount);
+router.post("/delivery-companies/:id/portal-account", deliveryCompanyAdmin.createPortalAccount);
+router.put("/delivery-companies/:id/portal-account", deliveryCompanyAdmin.updatePortalAccount);
 
 module.exports = router;

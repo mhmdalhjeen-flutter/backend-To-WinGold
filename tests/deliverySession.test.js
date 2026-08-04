@@ -68,9 +68,10 @@ test("Scenario 3: all stores approved → ready_for_pickup", () => {
 
 // Scenario 4 — status normalization (legacy → canonical)
 test("Scenario 4: legacy status mapping", () => {
-  assert.strictEqual(normalizeSessionStatus("accepted"), SESSION_STATUSES.DRIVER_ASSIGNED);
-  assert.strictEqual(normalizeSessionStatus("on_the_way"), SESSION_STATUSES.ON_DELIVERY);
+  assert.strictEqual(normalizeSessionStatus("driver_assigned"), SESSION_STATUSES.ACCEPTED);
+  assert.strictEqual(normalizeSessionStatus("on_the_way"), SESSION_STATUSES.OUT_FOR_DELIVERY);
   assert.strictEqual(normalizeSessionStatus("delivered"), SESSION_STATUSES.COMPLETED);
+  assert.strictEqual(normalizeSessionStatus("collecting_orders"), SESSION_STATUSES.OUT_FOR_DELIVERY);
 });
 
 test("fee for single order equals base only", () => {

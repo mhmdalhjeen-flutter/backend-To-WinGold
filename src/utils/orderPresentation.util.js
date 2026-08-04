@@ -1,4 +1,55 @@
 const { toCanonicalStatus } = require('../constants/marketplaceOrder.constants');
+const DeliverySession = require('../models/deliverySession');
+const {
+  normalizeSessionStatus,
+  getCustomerStatusLabel,
+} = require('../constants/deliverySession.constants');
+
+function summarizeDeliverySession(session) {
+  if (!session) return null;
+  const plain = typeof session.toObject === 'function' ? session.toObject() : { ...session };
+  const status = normalizeSessionStatus(plain.status);
+  const assigned = plain.assignedDriver || null;
+  const timeline = plain.statusTimeline || [];
+  const lastTimeline = timeline[timeline.length - 1];
+
+  return {
+    id: plain._id,
+    status,
+    statusLabel: getCustomerStatusLabel(status),
+    driverName: assigned?.name || '',
+    driverPhone: assigned?.phone || '',
+    driverWhatsapp: assigned?.whatsapp || assigned?.phone || '',
+    rejectionReason: plain.rejectionReason || (status === 'rejected' ? lastTimeline?.note || '' : ''),
+    lastUpdatedAt: lastTimeline?.at || plain.updatedAt || plain.createdAt,
+  };
+}
+
+async function enrichOrdersWithDeliverySession(orders) {
+  const formatted = (orders || []).map(formatOrderResponse);
+  const groupIds = [...new Set(
+    formatted.map((o) => o.deliveryGroupId).filter(Boolean).map(String),
+  )];
+  if (!groupIds.length) return formatted;
+
+  const sessions = await DeliverySession.find({ _id: { $in: groupIds } })
+    .select('status statusTimeline assignedDriver rejectionReason updatedAt createdAt')
+    .lean();
+  const byId = Object.fromEntries(sessions.map((s) => [String(s._id), summarizeDeliverySession(s)]));
+
+  return formatted.map((order) => {
+    const delivery = order.deliveryGroupId ? byId[String(order.deliveryGroupId)] : null;
+    return {
+      ...order,
+      deliverySession: delivery,
+      deliveryStatus: delivery?.status || null,
+      deliveryStatusLabel: delivery?.statusLabel || null,
+      deliveryDriverName: delivery?.driverName || '',
+      deliveryDriverPhone: delivery?.driverPhone || '',
+      deliveryDriverWhatsapp: delivery?.driverWhatsapp || '',
+    };
+  });
+}
 
 function mapOrderItem(item) {
   const purchaseMethod = item.purchaseMethod || 'quantity';
@@ -90,4 +141,6 @@ module.exports = {
   formatOrderResponse,
   formatOrderList,
   mapOrderItem,
+  enrichOrdersWithDeliverySession,
+  summarizeDeliverySession,
 };

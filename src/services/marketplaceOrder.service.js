@@ -1,7 +1,7 @@
 const Store = require("../models/store");
 const cartService = require("./cart.service");
 const orderService = require("./order.service");
-const { formatOrderResponse, formatOrderList } = require("../utils/orderPresentation.util");
+const { formatOrderResponse, formatOrderList, enrichOrdersWithDeliverySession } = require("../utils/orderPresentation.util");
 const {
   ORDER_STATUSES,
   toLegacyStatus,
@@ -37,17 +37,18 @@ async function createOrder(user, body = {}) {
 
 async function getCustomerOrders(customerId) {
   const orders = await orderService.getCustomerOrders(customerId);
-  return formatOrderList(orders);
+  return enrichOrdersWithDeliverySession(orders);
 }
 
 async function getCustomerOrderHistory(customerId) {
   const orders = await orderService.getCustomerOrderHistory(customerId);
-  return formatOrderList(orders);
+  return enrichOrdersWithDeliverySession(orders);
 }
 
 async function getCustomerOrderDetail(user, orderId) {
   const order = await orderService.getOrderDetail(user, orderId);
-  return formatOrderResponse(order);
+  const [enriched] = await enrichOrdersWithDeliverySession([order]);
+  return enriched;
 }
 
 async function getStoreOrders(ownerId) {

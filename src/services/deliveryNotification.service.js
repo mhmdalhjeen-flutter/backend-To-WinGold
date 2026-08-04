@@ -1,13 +1,17 @@
 const notificationService = require("./notification.service");
 const User = require("../models/user");
-const { SESSION_STATUSES } = require("../constants/deliverySession.constants");
+const { SESSION_STATUSES, normalizeSessionStatus } = require("../constants/deliverySession.constants");
 const { safeLog } = require("../utils/logSanitize.util");
 
 function sessionData(session) {
   const id = session?._id || session?.id;
+  const assigned = session?.assignedDriver || {};
   return {
     deliverySessionId: id ? String(id) : "",
-    url: id ? `/delivery/${id}` : "/delivery",
+    url: id ? `/requests/${id}` : "/requests",
+    driverName: assigned.name || session?.driverName || "",
+    driverPhone: assigned.phone || session?.driverPhone || "",
+    driverWhatsapp: assigned.whatsapp || session?.driverWhatsapp || assigned.phone || session?.driverPhone || "",
   };
 }
 
@@ -37,21 +41,21 @@ async function notifyStoreOwner(ownerId, { type, title, body, session, orderId, 
   });
 }
 
-async function notifyCompanyDrivers(companyId, { type, title, body, session }) {
+async function notifyCompanyUsers(companyId, { type, title, body, session }) {
   if (!companyId || !title) return;
   try {
-    const drivers = await User.find({
-      role: "driver",
+    const users = await User.find({
+      role: "delivery_company",
       deliveryCompanyId: companyId,
     })
       .select("_id")
       .lean();
 
-    if (!drivers.length) return;
+    if (!users.length) return;
 
     await notificationService.createMany(
-      drivers.map((d) => ({
-        user: d._id,
+      users.map((u) => ({
+        user: u._id,
         type,
         title,
         body: body || "",
@@ -59,7 +63,7 @@ async function notifyCompanyDrivers(companyId, { type, title, body, session }) {
       })),
     );
   } catch (err) {
-    safeLog("warn", "delivery_notify_drivers_failed", { message: err.message, companyId: String(companyId) });
+    safeLog("warn", "delivery_notify_company_failed", { message: err.message, companyId: String(companyId) });
   }
 }
 
@@ -88,7 +92,7 @@ async function onWaitingForStores(session) {
   await notifyCustomer(session.customer, {
     type: "delivery_waiting_stores",
     title: "بانتظار موافقة المتاجر",
-    body: "سيتم إبلاغ السائقين بعد موافقة جميع المتاجر",
+    body: "سيتم إرسال الطلب لشركة التوصيل بعد موافقة جميع المتاجر",
     session,
   });
 }
@@ -97,51 +101,65 @@ async function onReadyForPickup(session) {
   await notifyCustomer(session.customer, {
     type: "delivery_ready_for_pickup",
     title: "الطلبات جاهزة للتوصيل",
-    body: "تمت موافقة المتاجر — سيتم تعيين سائق قريباً",
+    body: "تمت موافقة المتاجر — تم إرسال الطلب لشركة التوصيل",
     session,
   });
 
-  await notifyCompanyDrivers(session.deliveryCompany, {
+  await notifyCompanyUsers(session.deliveryCompany, {
     type: "delivery_new_request",
     title: "طلب توصيل جديد",
-    body: `رحلة جديدة — ${session.storeStops?.length || 0} طلبات`,
+    body: `طلب جديد — ${session.storeStops?.length || 0} طلبات`,
     session,
   });
 }
 
-async function onDriverAssigned(session, driverName = "") {
+async function onAccepted(session) {
   await notifyCustomer(session.customer, {
-    type: "delivery_driver_assigned",
-    title: "تم تعيين سائق",
-    body: driverName ? `السائق ${driverName} قبل رحلة التوصيل` : "تم قبول رحلة التوصيل من قبل سائق",
+    type: "delivery_accepted",
+    title: "تم قبول طلب التوصيل",
+    body: "قبلت شركة التوصيل طلبك — سيتم التوصيل قريباً",
     session,
   });
 }
 
-async function onCollectingOrders(session) {
-  await notifyCustomer(session.customer, {
-    type: "delivery_collecting_orders",
-    title: "السائق يجمع الطلبات",
-    body: "السائق يستلم الطلبات من المتاجر",
-    session,
-  });
-}
+async function onOutForDelivery(session, extra = {}) {
+  const driverName = extra.driverName || session.driverName || session.assignedDriver?.name || "";
+  const driverPhone = extra.driverPhone || session.driverPhone || session.assignedDriver?.phone || "";
+  const body = driverName
+    ? `السائق ${driverName}${driverPhone ? ` — ${driverPhone}` : ""} في طريقه إليك`
+    : "طلبك في طريقه إليك";
 
-async function onOnDelivery(session) {
   await notifyCustomer(session.customer, {
     type: "delivery_on_the_way",
-    title: "السائق في الطريق",
-    body: "السائق في طريقه لتسليم طلباتك",
-    session,
+    title: driverName ? "السائق في الطريق" : "الطلب قيد التوصيل",
+    body,
+    session: {
+      ...session,
+      driverName,
+      driverPhone,
+      driverWhatsapp: extra.driverWhatsapp || session.driverWhatsapp || session.assignedDriver?.whatsapp || driverPhone,
+    },
   });
 }
 
 async function onCompleted(session) {
   await notifyCustomer(session.customer, {
     type: "delivery_completed",
-    title: "تم التوصيل",
-    body: "تم تسليم جميع الطلبات بنجاح",
+    title: "تم التسليم",
+    body: "تم تسليم طلبك بنجاح — شكراً لاستخدامك المنصة",
     session,
+  });
+}
+
+async function onRejected(session, reason = "") {
+  await notifyCustomer(session.customer, {
+    type: "delivery_rejected",
+    title: "تم رفض طلب التوصيل",
+    body: reason || "رفضت شركة التوصيل الطلب — يمكنك اختيار شركة أخرى",
+    session: {
+      ...session,
+      rejectionReason: reason || session.rejectionReason,
+    },
   });
 }
 
@@ -158,8 +176,9 @@ async function onStoreOrderUpdated(session, stop) {
 }
 
 async function dispatchStatusChange(previousStatus, session, extra = {}) {
-  const status = session.status;
-  if (status === previousStatus) return;
+  const status = normalizeSessionStatus(session.status);
+  const prev = normalizeSessionStatus(previousStatus);
+  if (status === prev) return;
 
   switch (status) {
     case SESSION_STATUSES.WAITING_FOR_STORES:
@@ -168,17 +187,17 @@ async function dispatchStatusChange(previousStatus, session, extra = {}) {
     case SESSION_STATUSES.READY_FOR_PICKUP:
       await onReadyForPickup(session);
       break;
-    case SESSION_STATUSES.DRIVER_ASSIGNED:
-      await onDriverAssigned(session, extra.driverName);
+    case SESSION_STATUSES.ACCEPTED:
+      await onAccepted(session);
       break;
-    case SESSION_STATUSES.COLLECTING_ORDERS:
-      if (previousStatus !== SESSION_STATUSES.COLLECTING_ORDERS) await onCollectingOrders(session);
-      break;
-    case SESSION_STATUSES.ON_DELIVERY:
-      await onOnDelivery(session);
+    case SESSION_STATUSES.OUT_FOR_DELIVERY:
+      await onOutForDelivery(session, extra);
       break;
     case SESSION_STATUSES.COMPLETED:
       await onCompleted(session);
+      break;
+    case SESSION_STATUSES.REJECTED:
+      await onRejected(session, extra.rejectReason);
       break;
     default:
       break;
@@ -189,11 +208,11 @@ module.exports = {
   onSessionCreated,
   onWaitingForStores,
   onReadyForPickup,
-  onDriverAssigned,
-  onCollectingOrders,
-  onOnDelivery,
+  onAccepted,
+  onOutForDelivery,
   onCompleted,
+  onRejected,
   onStoreOrderUpdated,
   dispatchStatusChange,
-  notifyCompanyDrivers,
+  notifyCompanyUsers,
 };
