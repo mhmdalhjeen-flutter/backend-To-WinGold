@@ -114,7 +114,7 @@ const userSchema = new mongoose.Schema({
     },
     role: {
         type: String,
-        enum: ["customer", "store", "supplier", "admin", "delivery_company"],
+        enum: ["customer", "store", "supplier", "admin", "delivery_company", "delivery_driver"],
         default: "customer",
     },
     /** شركة التوصيل — لحسابات بوابة الشركة (role: delivery_company) */
@@ -124,6 +124,15 @@ const userSchema = new mongoose.Schema({
         default: null,
         index: true,
     },
+    /** سجل السائق — لحسابات السائق (role: delivery_driver) */
+    deliveryDriverId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "DeliveryCompanyDriver",
+        default: null,
+        index: true,
+    },
+    /** true بعد أن تُنشئ الشركة كلمة المرور لأول مرة */
+    portalActivated: { type: Boolean, default: false },
    
 
 address: {

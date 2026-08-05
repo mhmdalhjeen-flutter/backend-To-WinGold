@@ -16,6 +16,10 @@ const {
   confirmVerification,
   confirmEmailLink,
   getVerificationStatus,
+  checkDeliveryPortalPhone,
+  activateDeliveryPortal,
+  verifyDriverRegistrationPassword,
+  registerDeliveryDriver,
 } = require("../controllers/auth.controller");
 
 const {
@@ -80,6 +84,10 @@ router.post("/verify-otp", otpVerifyLimiter, verifyOtp);
 router.post("/register-customer", authLimiter, registerCustomer);
 router.post("/register-business", authLimiter, registerBusiness);
 router.post("/login", loginLimiter, login);
+router.post("/delivery/check-phone", loginLimiter, checkDeliveryPortalPhone);
+router.post("/delivery/activate", loginLimiter, activateDeliveryPortal);
+router.post("/delivery/driver/verify-password", loginLimiter, verifyDriverRegistrationPassword);
+router.post("/delivery/driver/register", loginLimiter, registerDeliveryDriver);
 router.post("/logout", authMiddleware, logout);
 router.post("/refresh", authLimiter, refresh);
 router.post("/google", authLimiter, googleAuth);

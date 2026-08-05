@@ -13,6 +13,13 @@ const deliveryCompanyDriverSchema = new mongoose.Schema(
     whatsapp: { type: String, default: "", trim: true, maxlength: 32 },
     notes: { type: String, default: "", trim: true, maxlength: 500 },
     isActive: { type: Boolean, default: true, index: true },
+    /** Linked login account (role: delivery_driver) */
+    userId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      default: null,
+      index: true,
+    },
   },
   { timestamps: true },
 );

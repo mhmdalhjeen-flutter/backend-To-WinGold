@@ -12,6 +12,7 @@ const deliveryCompanySchema = new mongoose.Schema(
     slug: { type: String, required: true, unique: true, trim: true, lowercase: true, maxlength: 80 },
     phone: { type: String, required: true, trim: true, maxlength: 32 },
     whatsapp: { type: String, default: "", trim: true, maxlength: 32 },
+    address: { type: String, default: "", trim: true, maxlength: 500 },
     description: { type: String, default: "", trim: true, maxlength: 2000 },
     logo: { type: String, default: "" },
     basePrice: { type: Number, required: true, min: 0, default: 0 },
@@ -27,6 +28,8 @@ const deliveryCompanySchema = new mongoose.Schema(
     },
     isActive: { type: Boolean, default: true, index: true },
     deletedAt: { type: Date, default: null, index: true },
+    /** Hashed shared password for driver self-registration */
+    driverRegistrationPasswordHash: { type: String, default: null, select: false },
   },
   { timestamps: true },
 );

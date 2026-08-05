@@ -49,6 +49,9 @@ const orderSchema = new mongoose.Schema({
     enum: [
       'pending',
       'store_accepted',
+      'ready_for_delivery_pickup',
+      'ready_for_driver_pickup',
+      'delivery_handover_complete',
       'preparing',
       'delivered_to_driver',
       'delivered_to_customer',
@@ -85,6 +88,8 @@ const orderSchema = new mongoose.Schema({
     default: null,
   },
   pointsAwarded: { type: Boolean, default: false },
+  rewardPointsAwarded: { type: Number, default: 0 },
+  consumedCardType: { type: mongoose.Schema.Types.ObjectId, ref: 'CardType', default: null },
   cardDeducted: { type: Boolean, default: false },
   confirmedAt: { type: Date },
   completedAt: { type: Date },

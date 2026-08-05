@@ -1,28 +1,41 @@
 const { toCanonicalStatus } = require('../constants/marketplaceOrder.constants');
 const DeliverySession = require('../models/deliverySession');
+const DeliveryCompany = require('../models/deliveryCompany');
 const {
   normalizeSessionStatus,
   getCustomerStatusLabel,
 } = require('../constants/deliverySession.constants');
+const {
+  buildCustomerOrderTimeline,
+  getCustomerDeliveryStatusMessage,
+} = require('./orderTimeline.util');
 
-function summarizeDeliverySession(session) {
+function summarizeDeliverySession(session, company = null) {
   if (!session) return null;
   const plain = typeof session.toObject === 'function' ? session.toObject() : { ...session };
   const status = normalizeSessionStatus(plain.status);
   const assigned = plain.assignedDriver || null;
   const timeline = plain.statusTimeline || [];
   const lastTimeline = timeline[timeline.length - 1];
+  const companyPlain = company || plain.deliveryCompany;
 
-  return {
+  const summary = {
     id: plain._id,
     status,
     statusLabel: getCustomerStatusLabel(status),
+    statusTimeline: timeline,
     driverName: assigned?.name || '',
     driverPhone: assigned?.phone || '',
     driverWhatsapp: assigned?.whatsapp || assigned?.phone || '',
+    assignedDriver: assigned,
     rejectionReason: plain.rejectionReason || (status === 'rejected' ? lastTimeline?.note || '' : ''),
     lastUpdatedAt: lastTimeline?.at || plain.updatedAt || plain.createdAt,
+    companyName: companyPlain?.name || '',
+    companyPhone: companyPlain?.phone || '',
+    companyWhatsapp: companyPlain?.whatsapp || companyPlain?.phone || '',
   };
+
+  return summary;
 }
 
 async function enrichOrdersWithDeliverySession(orders) {
@@ -30,25 +43,96 @@ async function enrichOrdersWithDeliverySession(orders) {
   const groupIds = [...new Set(
     formatted.map((o) => o.deliveryGroupId).filter(Boolean).map(String),
   )];
-  if (!groupIds.length) return formatted;
+  if (!groupIds.length) return formatted.map(enrichOrderDeliveryFields);
 
   const sessions = await DeliverySession.find({ _id: { $in: groupIds } })
-    .select('status statusTimeline assignedDriver rejectionReason updatedAt createdAt')
+    .select('status statusTimeline assignedDriver rejectionReason updatedAt createdAt deliveryCompany')
     .lean();
-  const byId = Object.fromEntries(sessions.map((s) => [String(s._id), summarizeDeliverySession(s)]));
 
-  return formatted.map((order) => {
-    const delivery = order.deliveryGroupId ? byId[String(order.deliveryGroupId)] : null;
-    return {
-      ...order,
-      deliverySession: delivery,
-      deliveryStatus: delivery?.status || null,
-      deliveryStatusLabel: delivery?.statusLabel || null,
-      deliveryDriverName: delivery?.driverName || '',
-      deliveryDriverPhone: delivery?.driverPhone || '',
-      deliveryDriverWhatsapp: delivery?.driverWhatsapp || '',
-    };
-  });
+  const companyIds = [...new Set(sessions.map((s) => String(s.deliveryCompany)).filter(Boolean))];
+  const companies = companyIds.length
+    ? await DeliveryCompany.find({ _id: { $in: companyIds } }).select('name phone whatsapp').lean()
+    : [];
+  const companyById = Object.fromEntries(companies.map((c) => [String(c._id), c]));
+
+  const byId = Object.fromEntries(
+    sessions.map((s) => [
+      String(s._id),
+      summarizeDeliverySession(s, companyById[String(s.deliveryCompany)]),
+    ]),
+  );
+
+  return formatted.map((order) => enrichOrderDeliveryFields(order, byId[String(order.deliveryGroupId)]));
+}
+
+function enrichOrderDeliveryFields(order, delivery = null) {
+  const deliveryStatusMessage = getCustomerDeliveryStatusMessage(order, delivery);
+  const timeline = buildCustomerOrderTimeline(order, delivery);
+
+  return {
+    ...order,
+    deliverySession: delivery,
+    deliveryStatus: delivery?.status || null,
+    deliveryStatusLabel: delivery?.statusLabel || deliveryStatusMessage?.title || null,
+    deliveryStatusMessage,
+    deliveryDriverName: delivery?.driverName || '',
+    deliveryDriverPhone: delivery?.driverPhone || '',
+    deliveryDriverWhatsapp: delivery?.driverWhatsapp || '',
+    deliveryCompanyName: delivery?.companyName || '',
+    deliveryCompanyPhone: delivery?.companyPhone || '',
+    deliveryCompanyWhatsapp: delivery?.companyWhatsapp || '',
+    orderTimeline: timeline,
+  };
+}
+
+async function enrichSingleOrder(order, options = {}) {
+  const formatted = formatOrderResponse(order);
+  if (!formatted.deliveryGroupId) {
+    return enrichOrderDeliveryFields({
+      ...formatted,
+      statusTimeline: order.statusTimeline || [],
+    });
+  }
+
+  const session = await DeliverySession.findById(formatted.deliveryGroupId)
+    .select('status statusTimeline assignedDriver rejectionReason updatedAt createdAt deliveryCompany')
+    .lean();
+
+  let company = null;
+  if (session?.deliveryCompany) {
+    company = await DeliveryCompany.findById(session.deliveryCompany).select('name phone whatsapp').lean();
+  }
+
+  const delivery = session ? summarizeDeliverySession(session, company) : null;
+  const enriched = enrichOrderDeliveryFields({
+    ...formatted,
+    statusTimeline: order.statusTimeline || [],
+  }, delivery);
+
+  if (options.forStore) {
+    const hasDriver = Boolean(
+      delivery?.assignedDriver?.driverId
+      || delivery?.assignedDriver?.name
+      || delivery?.driverName
+    );
+    enriched.canHandToDriver = enriched.legacyStatus === "ready_for_driver_pickup" && hasDriver;
+    enriched.storeStatusLabel = getStoreStatusLabel(enriched.legacyStatus);
+  }
+
+  return enriched;
+}
+
+function getStoreStatusLabel(legacyStatus) {
+  const labels = {
+    pending: 'بانتظار التأكيد',
+    ready_for_delivery_pickup: 'جاهز للتسليم — شركة التوصيل',
+    ready_for_driver_pickup: 'جاهز لاستلام السائق',
+    delivery_handover_complete: 'اكتمل تسليم الطلب للسائق',
+    delivered_to_customer: 'تم التسليم للزبون',
+    rejected: 'مرفوض',
+    cancelled: 'ملغى',
+  };
+  return labels[legacyStatus] || legacyStatus;
 }
 
 function mapOrderItem(item) {
@@ -72,17 +156,12 @@ function mapOrderItem(item) {
     purchaseMethod,
     requestedAmount: purchaseMethod === 'price' ? (requestedAmount ?? price) : undefined,
     subtotal,
-    // Legacy fields preserved for existing clients
     item: item.item,
     name: item.name || item.productName,
     image: item.image || item.productImage || '',
   };
 }
 
-/**
- * Shape an order document for marketplace API responses.
- * Keeps legacy fields and adds canonical snapshot fields.
- */
 function formatOrderResponse(order) {
   if (!order) return null;
 
@@ -118,6 +197,7 @@ function formatOrderResponse(order) {
     transferInformation: transfer,
     status: toCanonicalStatus(plain.status),
     legacyStatus: plain.status,
+    statusTimeline: plain.statusTimeline || [],
     rejectionReason: plain.rejectionReason || '',
     verificationCode: plain.verificationCode || '',
     paymentStatus: plain.paymentStatus || 'unpaid',
@@ -142,5 +222,7 @@ module.exports = {
   formatOrderList,
   mapOrderItem,
   enrichOrdersWithDeliverySession,
+  enrichSingleOrder,
   summarizeDeliverySession,
+  getStoreStatusLabel,
 };

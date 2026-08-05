@@ -25,6 +25,7 @@ function formatDriver(doc) {
     whatsapp: plain.whatsapp || "",
     notes: plain.notes || "",
     isActive: Boolean(plain.isActive),
+    hasAccount: Boolean(plain.userId),
     createdAt: plain.createdAt,
     updatedAt: plain.updatedAt,
   };

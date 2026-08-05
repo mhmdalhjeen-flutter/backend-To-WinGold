@@ -4,6 +4,7 @@ const roleMiddleware = require("../middleware/role.middleware");
 const deliveryController = require("../controllers/delivery.controller");
 const deliverySessionController = require("../controllers/deliverySession.controller");
 const deliveryCompanyPortalController = require("../controllers/deliveryCompanyPortal.controller");
+const deliveryDriverController = require("../controllers/deliveryDriver.controller");
 const User = require("../models/user");
 
 const router = express.Router();
@@ -12,7 +13,7 @@ async function attachUserDoc(req, res, next) {
   try {
     if (req.user?.id && !req.userDoc) {
       req.userDoc = await User.findById(req.user.id)
-        .select("name phone role deliveryCompanyId")
+        .select("name phone role deliveryCompanyId deliveryDriverId")
         .lean();
       if (req.userDoc) {
         req.userDoc._id = req.userDoc._id || req.user.id;
@@ -62,5 +63,15 @@ router.post("/company/drivers", deliveryCompanyPortalController.createDriver);
 router.get("/company/drivers/:driverId", deliveryCompanyPortalController.getDriver);
 router.put("/company/drivers/:driverId", deliveryCompanyPortalController.updateDriver);
 router.delete("/company/drivers/:driverId", deliveryCompanyPortalController.deleteDriver);
+router.get("/company/driver-registration-password", deliveryCompanyPortalController.getDriverRegistrationPasswordStatus);
+router.put("/company/driver-registration-password", deliveryCompanyPortalController.setDriverRegistrationPassword);
+
+// ── Driver portal ──
+router.use("/driver", authMiddleware, roleMiddleware(["delivery_driver"]), attachUserDoc);
+router.get("/driver/assignments", deliveryDriverController.listAssignments);
+router.get("/driver/assignments/history", deliveryDriverController.listHistory);
+router.get("/driver/assignments/:assignmentId", deliveryDriverController.getAssignment);
+router.patch("/driver/assignments/:assignmentId/complete", deliveryDriverController.completeDelivery);
+router.post("/driver/assignments/sync", deliveryDriverController.syncOffline);
 
 module.exports = router;

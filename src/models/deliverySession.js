@@ -97,6 +97,10 @@ const deliverySessionSchema = new mongoose.Schema(
     submittedAt: { type: Date, default: null },
     notes: { type: String, default: "" },
     rejectionReason: { type: String, default: "" },
+    driverDeliveryProof: { type: String, default: "" },
+    driverDeliveryNote: { type: String, default: "", maxlength: 1000 },
+    driverDeliveredAt: { type: Date, default: null },
+    driverCompletionSyncId: { type: String, default: "", index: true, sparse: true },
   },
   { timestamps: true },
 );

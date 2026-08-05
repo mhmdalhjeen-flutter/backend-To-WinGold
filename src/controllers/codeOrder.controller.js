@@ -3,6 +3,7 @@ const CodeOrder = require("../models/codeOrder");
 const CardType  = require("../models/cardType");
 const Store     = require("../models/store");
 const PromoCode = require("../models/promoCode");
+const storeCardInventoryService = require("../services/storeCardInventory.service");
 const crypto    = require("crypto");
 const { generatePromoCodeString } = require("../utils/promoCode.util");
 const { buildGiftCodesExcelBuffer } = require("../utils/giftCodeExcelExport.util");
@@ -141,8 +142,10 @@ exports.configureOrder = async (req, res) => {
 
         // ✅ رقمي: أضف الكروت مباشرة لرصيد المتجر وغيّر الحالة لـ received تلقائياً
         if (order.deliveryType === "digital") {
-            await Store.findByIdAndUpdate(order.store, {
-                $inc: { cards: order.quantity }
+            await storeCardInventoryService.addCardsToStore(order.store, {
+                cardType: order.cardType._id,
+                pointsValue: order.cardType.pointsValue ?? order.cardType.points ?? 1,
+                quantity: order.quantity,
             });
             order.status     = "received";
             order.receivedAt = new Date();
@@ -181,8 +184,11 @@ exports.markAsReceived = async (req, res) => {
             return res.status(400).json({ message: "الطلب الرقمي يُضاف تلقائياً" });
 
         // ✅ أضف الكروت لرصيد المتجر عند تأكيد استلام الورقي
-        await Store.findByIdAndUpdate(order.store, {
-            $inc: { cards: order.quantity }
+        const populated = await CodeOrder.findById(id).populate("cardType");
+        await storeCardInventoryService.addCardsToStore(order.store, {
+            cardType: populated.cardType._id,
+            pointsValue: populated.cardType.pointsValue ?? populated.cardType.points ?? 1,
+            quantity: order.quantity,
         });
 
         order.status     = "received";
@@ -268,7 +274,11 @@ exports.generateDirectStoreCodes = async (req, res) => {
         const physicalCodes = created.slice(digitalQty);
 
         if (digitalQty > 0) {
-            await Store.findByIdAndUpdate(safeStoreId, { $inc: { cards: digitalQty } });
+            await storeCardInventoryService.addCardsToStore(safeStoreId, {
+                cardType: null,
+                pointsValue: points,
+                quantity: digitalQty,
+            });
         }
 
         res.status(201).json({

@@ -32,6 +32,7 @@ function toPortalAccountSummary(user) {
     identifier: plain.email || plain.phone || "",
     isActive: plain.status === "active",
     status: plain.status,
+    portalActivated: Boolean(plain.portalActivated),
   };
 }
 
@@ -65,6 +66,42 @@ async function assertPortalIdentifierAvailable({ email, phone }, exceptUserId = 
   }
 }
 
+async function createPendingPortalUser(company, phone) {
+  const normalizedPhone = normalizeLocalPhone(phone);
+  if (!normalizedPhone) {
+    const err = new Error("رقم الهاتف غير صالح");
+    err.status = 400;
+    throw err;
+  }
+
+  const existing = await User.findOne({ phone: normalizedPhone });
+  if (existing) {
+    const err = new Error("رقم الهاتف مستخدم مسبقاً");
+    err.status = 400;
+    throw err;
+  }
+
+  const existingPortal = await User.findOne({
+    role: "delivery_company",
+    deliveryCompanyId: company._id,
+  });
+  if (existingPortal) {
+    const err = new Error("يوجد حساب بوابة لهذه الشركة مسبقاً");
+    err.status = 400;
+    throw err;
+  }
+
+  return User.create({
+    name: company.name,
+    phone: normalizedPhone,
+    role: "delivery_company",
+    deliveryCompanyId: company._id,
+    password: null,
+    portalActivated: false,
+    status: "active",
+  });
+}
+
 async function createPortalUserForCompany(company, portalAccount = {}) {
   assertNoMongoOperators(portalAccount, "portalAccount");
   const password = cleanAuthPassword(portalAccount.password);
@@ -93,6 +130,7 @@ async function createPortalUserForCompany(company, portalAccount = {}) {
     role: "delivery_company",
     deliveryCompanyId: company._id,
     status: isActive ? "active" : "suspended",
+    portalActivated: true,
   });
 }
 
@@ -196,63 +234,40 @@ exports.create = async (req, res) => {
     assertNoMongoOperators(req.body, "deliveryCompany");
     const name = cleanString(req.body.name, { field: "name", max: 120, required: true });
     const phone = cleanString(req.body.phone, { field: "phone", max: 32, required: true });
-    const slugInput = cleanString(req.body.slug, { field: "slug", max: 80 });
-    const slug = await ensureUniqueSlug(slugInput || name);
-
-    const logo = req.body.logo
-      ? await processOptionalImage(req.body.logo, { maxWidth: 512, enforceCloudinaryHttps: true })
-      : "";
+    const address = cleanString(req.body.address, { field: "address", max: 500, required: true });
+    const slug = await ensureUniqueSlug(name);
 
     const company = await DeliveryCompany.create({
       name,
-      nameEn: cleanString(req.body.nameEn, { field: "nameEn", max: 120 }),
       slug,
       phone,
-      whatsapp: cleanString(req.body.whatsapp, { field: "whatsapp", max: 32 }),
-      description: cleanString(req.body.description, { field: "description", max: 2000 }),
-      logo,
-      basePrice: numberInRange(req.body.basePrice, { field: "basePrice", min: 0, max: 100_000, required: true }),
-      extraOrderPrice: numberInRange(req.body.extraOrderPrice, {
-        field: "extraOrderPrice",
-        min: 0,
-        max: 100_000,
-        required: true,
-      }),
-      currency: cleanString(req.body.currency || "ILS", { field: "currency", max: 8 }),
+      address,
+      basePrice: 0,
+      extraOrderPrice: 0,
+      currency: "ILS",
       isActive: req.body.isActive !== false,
-      servesAllRegions: Boolean(req.body.servesAllRegions),
-      servedRegionIds: req.body.servesAllRegions
-        ? []
-        : (Array.isArray(req.body.servedRegionIds) ? req.body.servedRegionIds : [])
-          .map((regionId) => requireObjectId(regionId, "servedRegionIds")),
+      servesAllRegions: false,
+      servedRegionIds: [],
     });
 
-    applyPaymentMethods(company, req.body.paymentMethods || {});
-    await company.save();
-
-    if (!req.body.portalAccount?.identifier || !req.body.portalAccount?.password) {
-      await DeliveryCompany.findByIdAndDelete(company._id);
-      return res.status(400).json({ message: "يجب إنشاء حساب دخول للشركة (البريد/الهاتف وكلمة المرور)" });
-    }
-
     try {
-      await createPortalUserForCompany(company, req.body.portalAccount);
+      await createPendingPortalUser(company, phone);
     } catch (portalErr) {
       await DeliveryCompany.findByIdAndDelete(company._id);
       throw portalErr;
     }
 
-    const accounts = await listPaymentAccounts(company._id);
     const portalUser = await User.findOne({
       role: "delivery_company",
       deliveryCompanyId: company._id,
-    }).select("name email phone status deliveryCompanyId");
+    }).select("name email phone status deliveryCompanyId portalActivated");
 
     res.status(201).json({
       company: {
-        ...toAdminCompany(company, accounts),
+        ...toAdminCompany(company, []),
         portalAccount: toPortalAccountSummary(portalUser),
       },
+      message: "تم تسجيل الشركة — ستُفعّل من بوابة التوصيل عند أول دخول",
     });
   } catch (err) {
     res.status(err.status || 400).json({ message: err.message });
@@ -278,6 +293,9 @@ exports.update = async (req, res) => {
     }
     if (req.body.phone !== undefined) {
       company.phone = cleanString(req.body.phone, { field: "phone", max: 32, required: true });
+    }
+    if (req.body.address !== undefined) {
+      company.address = cleanString(req.body.address, { field: "address", max: 500 });
     }
     if (req.body.whatsapp !== undefined) {
       company.whatsapp = cleanString(req.body.whatsapp, { field: "whatsapp", max: 32 });
@@ -328,20 +346,37 @@ exports.update = async (req, res) => {
 
     await company.save();
 
+    const portalUser = await User.findOne({
+      role: "delivery_company",
+      deliveryCompanyId: company._id,
+    });
+    if (portalUser) {
+      if (req.body.name !== undefined) portalUser.name = company.name;
+      if (req.body.phone !== undefined && !portalUser.portalActivated) {
+        const normalizedPhone = normalizeLocalPhone(company.phone);
+        const phoneTaken = await User.findOne({ phone: normalizedPhone, _id: { $ne: portalUser._id } });
+        if (phoneTaken) {
+          return res.status(400).json({ message: "رقم الهاتف مستخدم مسبقاً" });
+        }
+        portalUser.phone = normalizedPhone;
+      }
+      await portalUser.save();
+    }
+
     if (req.body.portalAccount) {
       await updatePortalUserForCompany(company, req.body.portalAccount);
     }
 
     const accounts = await listPaymentAccounts(company._id);
-    const portalUser = await User.findOne({
+    const portalUserDoc = await User.findOne({
       role: "delivery_company",
       deliveryCompanyId: company._id,
-    }).select("name email phone status deliveryCompanyId");
+    }).select("name email phone status deliveryCompanyId portalActivated");
 
     res.json({
       company: {
         ...toAdminCompany(company, accounts),
-        portalAccount: toPortalAccountSummary(portalUser),
+        portalAccount: toPortalAccountSummary(portalUserDoc),
       },
     });
   } catch (err) {

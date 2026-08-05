@@ -45,7 +45,13 @@ exports.getCustomerOrderHistory = async (req, res) => {
 exports.getOrderDetail = async (req, res) => {
   try {
     const orderId = requireObjectId(req.params.id, "id");
-    const order = await marketplaceOrderService.getCustomerOrderDetail(req.user, orderId);
+    const role = req.user.role;
+    let order;
+    if (role === "store" || role === "supplier") {
+      order = await marketplaceOrderService.getStoreOrderDetail(req.user, orderId);
+    } else {
+      order = await marketplaceOrderService.getCustomerOrderDetail(req.user, orderId);
+    }
     res.json({ order });
   } catch (err) {
     handleError(res, err);
@@ -112,6 +118,21 @@ exports.cancelOrder = async (req, res) => {
       metadata: { orderId: String(orderId) },
     });
     res.json({ message: "تم إلغاء الطلب", order });
+  } catch (err) {
+    handleError(res, err);
+  }
+};
+
+exports.handOrderToDriver = async (req, res) => {
+  try {
+    const orderId = requireObjectId(req.params.id, "id");
+    const result = await marketplaceOrderService.handOrderToDriver(req.user.id, orderId);
+    await auditService.logSensitiveOperation(req, {
+      action: "تسليم الطلب للسائق",
+      details: `طلب ${orderId}`,
+      metadata: { orderId: String(orderId), status: "delivery_handover_complete" },
+    });
+    res.json(result);
   } catch (err) {
     handleError(res, err);
   }

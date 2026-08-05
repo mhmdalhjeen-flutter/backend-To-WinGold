@@ -67,6 +67,9 @@ async function updateCompanyProfile(user, body = {}) {
   if (body.description !== undefined) {
     company.description = cleanString(body.description, { field: "description", max: 2000 });
   }
+  if (body.address !== undefined) {
+    company.address = cleanString(body.address, { field: "address", max: 500 });
+  }
   if (body.logo !== undefined) {
     company.logo = body.logo
       ? await processOptionalImage(body.logo, {

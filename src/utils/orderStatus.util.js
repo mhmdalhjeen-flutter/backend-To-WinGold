@@ -1,6 +1,9 @@
 const ACTIVE_STATUSES = new Set([
   'pending',
   'store_accepted',
+  'ready_for_delivery_pickup',
+  'ready_for_driver_pickup',
+  'delivery_handover_complete',
   'confirmed',
   'preparing',
   'delivered_to_driver',
@@ -17,6 +20,9 @@ const TERMINAL_STATUSES = new Set([
 const ALLOWED_STATUSES = [
   'pending',
   'store_accepted',
+  'ready_for_delivery_pickup',
+  'ready_for_driver_pickup',
+  'delivery_handover_complete',
   'preparing',
   'delivered_to_driver',
   'delivered_to_customer',
@@ -28,8 +34,11 @@ const ALLOWED_STATUSES = [
 ];
 
 const ALLOWED_TRANSITIONS = {
-  pending: new Set(['store_accepted', 'confirmed', 'rejected', 'cancelled']),
+  pending: new Set(['store_accepted', 'ready_for_delivery_pickup', 'confirmed', 'rejected', 'cancelled']),
   store_accepted: new Set(['preparing', 'rejected', 'cancelled']),
+  ready_for_delivery_pickup: new Set(['ready_for_driver_pickup', 'rejected', 'cancelled']),
+  ready_for_driver_pickup: new Set(['delivery_handover_complete', 'rejected', 'cancelled']),
+  delivery_handover_complete: new Set(['delivered_to_customer', 'cancelled']),
   confirmed: new Set(['preparing', 'rejected', 'cancelled', 'delivered', 'completed_off_platform']),
   preparing: new Set(['delivered_to_driver', 'cancelled']),
   delivered_to_driver: new Set(['delivered_to_customer']),
@@ -67,6 +76,9 @@ function isTerminalStatus(status) {
 const STATUS_LABELS = {
   pending: 'بانتظار التأكيد',
   store_accepted: 'تم قبول المتجر',
+  ready_for_delivery_pickup: 'جاهز للتسليم — شركة التوصيل',
+  ready_for_driver_pickup: 'جاهز لاستلام السائق',
+  delivery_handover_complete: 'اكتمل تسليم الطلب للسائق',
   preparing: 'قيد التحضير',
   delivered_to_driver: 'تم التسليم للسائق',
   delivered_to_customer: 'تم التسليم للزبون',

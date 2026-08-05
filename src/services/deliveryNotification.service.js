@@ -100,25 +100,36 @@ async function onWaitingForStores(session) {
 async function onReadyForPickup(session) {
   await notifyCustomer(session.customer, {
     type: "delivery_ready_for_pickup",
-    title: "الطلبات جاهزة للتوصيل",
-    body: "تمت موافقة المتاجر — تم إرسال الطلب لشركة التوصيل",
+    title: "تم قبول الطلب",
+    body: "تم قبول طلبك — بانتظار شركة التوصيل",
     session,
   });
 
   await notifyCompanyUsers(session.deliveryCompany, {
     type: "delivery_new_request",
-    title: "طلب توصيل جديد",
-    body: `طلب جديد — ${session.storeStops?.length || 0} طلبات`,
+    title: "طلب جاهز للاستلام",
+    body: `طلب جاهز للاستلام — ${session.storeStops?.length || 0} طلبات`,
     session,
   });
 }
 
-async function onAccepted(session) {
+async function onDriverAssigned(session, extra = {}) {
+  const driverName = extra.driverName || session.driverName || session.assignedDriver?.name || "";
+  const companyName = session.companyName || "";
+  const body = driverName
+    ? `السائق ${driverName} متوجه إلى المتجر لاستلام طلبك`
+    : "تم تعيين سائق وسيتوجه إلى المتجر قريباً";
+
   await notifyCustomer(session.customer, {
-    type: "delivery_accepted",
-    title: "تم قبول طلب التوصيل",
-    body: "قبلت شركة التوصيل طلبك — سيتم التوصيل قريباً",
-    session,
+    type: "delivery_driver_assigned",
+    title: "تم تعيين سائق وسيتوجه إلى المتجر قريباً",
+    body: companyName ? `${body} — ${companyName}` : body,
+    session: {
+      ...session,
+      driverName,
+      driverPhone: extra.driverPhone || session.driverPhone,
+      driverWhatsapp: extra.driverWhatsapp || session.driverWhatsapp,
+    },
   });
 }
 
@@ -145,7 +156,7 @@ async function onOutForDelivery(session, extra = {}) {
 async function onCompleted(session) {
   await notifyCustomer(session.customer, {
     type: "delivery_completed",
-    title: "تم التسليم",
+    title: "تم التسليم بنجاح",
     body: "تم تسليم طلبك بنجاح — شكراً لاستخدامك المنصة",
     session,
   });
@@ -175,6 +186,15 @@ async function onStoreOrderUpdated(session, stop) {
   });
 }
 
+async function onCancelled(session, reason = "") {
+  await notifyCustomer(session.customer, {
+    type: "delivery_cancelled",
+    title: "تم إلغاء طلب التوصيل",
+    body: reason || "تم إلغاء طلب التوصيل بسبب رفض أحد المتاجر",
+    session,
+  });
+}
+
 async function dispatchStatusChange(previousStatus, session, extra = {}) {
   const status = normalizeSessionStatus(session.status);
   const prev = normalizeSessionStatus(previousStatus);
@@ -187,8 +207,11 @@ async function dispatchStatusChange(previousStatus, session, extra = {}) {
     case SESSION_STATUSES.READY_FOR_PICKUP:
       await onReadyForPickup(session);
       break;
+    case SESSION_STATUSES.DRIVER_ASSIGNED:
+      await onDriverAssigned(session, extra);
+      break;
     case SESSION_STATUSES.ACCEPTED:
-      await onAccepted(session);
+      await onDriverAssigned(session, extra);
       break;
     case SESSION_STATUSES.OUT_FOR_DELIVERY:
       await onOutForDelivery(session, extra);
@@ -199,6 +222,9 @@ async function dispatchStatusChange(previousStatus, session, extra = {}) {
     case SESSION_STATUSES.REJECTED:
       await onRejected(session, extra.rejectReason);
       break;
+    case SESSION_STATUSES.CANCELLED:
+      await onCancelled(session, extra.cancelReason);
+      break;
     default:
       break;
   }
@@ -208,7 +234,7 @@ module.exports = {
   onSessionCreated,
   onWaitingForStores,
   onReadyForPickup,
-  onAccepted,
+  onDriverAssigned,
   onOutForDelivery,
   onCompleted,
   onRejected,

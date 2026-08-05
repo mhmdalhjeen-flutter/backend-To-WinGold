@@ -81,6 +81,8 @@ router.patch("/:id/confirm", roleMiddleware.business, marketplaceOrderController
 
 router.patch("/:id/reject", roleMiddleware.business, marketplaceOrderController.rejectOrder);
 
+router.patch("/:id/hand-to-driver", roleMiddleware.business, marketplaceOrderController.handOrderToDriver);
+
 router.patch("/:id/status", roleMiddleware.business, async (req, res) => {
   try {
     assertNoMongoOperators(req.body, "order");
@@ -91,7 +93,7 @@ router.patch("/:id/status", roleMiddleware.business, async (req, res) => {
       req.body.status,
       { rejectionReason: req.body.rejectionReason }
     );
-    if (["store_accepted", "confirmed", "rejected", "cancelled", "preparing", "delivered_to_driver", "delivered_to_customer", "delivered"].includes(req.body.status)) {
+    if (["store_accepted", "ready_for_delivery_pickup", "ready_for_driver_pickup", "delivery_handover_complete", "confirmed", "rejected", "cancelled", "preparing", "delivered_to_driver", "delivered_to_customer", "delivered"].includes(req.body.status)) {
       await auditService.logSensitiveOperation(req, {
         action: `تحديث حالة طلب — ${req.body.status}`,
         details: `طلب ${orderId}`,

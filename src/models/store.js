@@ -136,6 +136,13 @@ const storeSchema = new mongoose.Schema({
     default: 0,          // عدد الكروت المتاحة
     },
 
+    /** مخزون الكروت الرقمية حسب النوع — كل نوع له pointsValue مستقل */
+    cardInventory: [{
+        cardType: { type: mongoose.Schema.Types.ObjectId, ref: "CardType", default: null },
+        pointsValue: { type: Number, required: true, min: 1 },
+        count: { type: Number, default: 0, min: 0 },
+    }],
+
     bypassCards: {
         type: Boolean,
         default: false,      // الأدمن يفعّلها ليتخطى شرط الكروت

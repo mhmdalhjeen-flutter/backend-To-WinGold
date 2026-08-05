@@ -12,6 +12,7 @@ const {
   getCompanyStatusLabel,
   NEW_COMPANY_REQUEST_STATUSES,
   ACCEPTED_COMPANY_STATUSES,
+  ASSIGNED_COMPANY_STATUSES,
   OUT_FOR_DELIVERY_STATUSES,
   SENT_ORDER_STATUSES,
   DELIVERED_SESSION_STATUSES,
@@ -24,6 +25,7 @@ const {
   normalizeSessionStatus,
   allStoresApproved,
   deriveInitialSubmittedStatus,
+  allStopsCollected,
 } = require("../constants/deliverySession.constants");
 const deliveryPricingService = require("./deliveryPricing.service");
 const deliveryNotificationService = require("./deliveryNotification.service");
@@ -126,11 +128,21 @@ function syncPaymentSubdocument(doc, body = {}) {
   syncLegacyPaymentFields(doc);
 }
 
-function formatSessionSummary(session) {
+function attachCompanyFields(summary, company) {
+  if (!company) return summary;
+  const plain = company.toObject ? company.toObject() : company;
+  summary.companyName = plain.name || "";
+  summary.companyPhone = plain.phone || "";
+  summary.companyWhatsapp = plain.whatsapp || plain.phone || "";
+  return summary;
+}
+
+function formatSessionSummary(session, company = null) {
   const plain = session.toObject ? session.toObject() : { ...session };
   const status = normalizeSessionStatus(plain.status);
   const storeCount = new Set((plain.storeStops || []).map((s) => String(s.store))).size;
   const assigned = plain.assignedDriver || null;
+  const companyRef = company || plain.deliveryCompany;
   const orderNumbers = (plain.storeStops || []).map((s) => s.orderNumber).filter(Boolean);
   const orderNumber = orderNumbers.length === 1
     ? orderNumbers[0]
@@ -143,7 +155,7 @@ function formatSessionSummary(session) {
   const rejectionReason = plain.rejectionReason
     || (status === SESSION_STATUSES.REJECTED ? lastTimeline?.note || "" : "");
 
-  return {
+  return attachCompanyFields({
     ...plain,
     status,
     statusLabel: getCompanyStatusLabel(status),
@@ -165,11 +177,11 @@ function formatSessionSummary(session) {
     driverPhone: assigned?.phone || "",
     driverWhatsapp: assigned?.whatsapp || assigned?.phone || "",
     driverNote: assigned?.note || "",
-  };
+  }, companyRef && companyRef.name ? companyRef : null);
 }
 
-function formatSessionDetails(session) {
-  const summary = formatSessionSummary(session);
+function formatSessionDetails(session, company = null) {
+  const summary = formatSessionSummary(session, company);
   summary.storeStops = (summary.storeStops || []).map((stop) => ({
     ...stop,
     orderStatusLabel: STORE_STOP_LABELS[stop.orderStatus] || stop.orderStatus,
@@ -203,7 +215,7 @@ async function refreshStoreStopsFromOrders(session) {
 async function getActiveSessionForCustomer(customerId) {
   const session = await DeliverySession.findOne({
     customer: customerId,
-    status: { $in: [...CUSTOMER_ACTIVE_STATUSES, "waiting_for_acceptance", "accepted", "on_the_way"] },
+    status: { $in: [...CUSTOMER_ACTIVE_STATUSES, "waiting_for_acceptance", "accepted", "on_the_way", "driver_assigned"] },
   })
     .sort({ createdAt: -1 })
     .lean();
@@ -335,6 +347,44 @@ async function confirmSession(customerId, body = {}) {
   return formatted;
 }
 
+/** Sync session after store hands order to driver */
+async function syncAfterStoreHandover(orderId) {
+  const oid = requireObjectId(orderId, "orderId");
+  const order = await Order.findById(oid).select("status deliveryMethod deliveryGroup store").lean();
+  if (!order || order.deliveryMethod !== DELIVERY_METHODS.DELIVERY || !order.deliveryGroup) return;
+
+  const doc = await DeliverySession.findById(order.deliveryGroup);
+  if (!doc) return;
+
+  const previousStatus = normalizeSessionStatus(doc.status);
+  if (TERMINAL_SESSION_STATUSES.has(previousStatus)) return;
+
+  doc.storeStops = (doc.storeStops || []).map((stop) => {
+    if (String(stop.order) !== String(oid)) return stop;
+    return {
+      ...stop,
+      orderStatus: order.status,
+      collectionStatus: "collected",
+      collectedAt: stop.collectedAt || new Date(),
+    };
+  });
+
+  if (allStopsCollected(doc.storeStops) && previousStatus === SESSION_STATUSES.DRIVER_ASSIGNED) {
+    doc.status = SESSION_STATUSES.OUT_FOR_DELIVERY;
+    pushTimeline(doc, SESSION_STATUSES.OUT_FOR_DELIVERY, "استلم السائق الطلب من المتجر");
+  }
+
+  doc.markModified("storeStops");
+  await doc.save();
+
+  const company = await DeliveryCompany.findById(doc.deliveryCompany).select("name phone whatsapp").lean();
+  const formatted = formatSessionDetails(doc, company);
+  setImmediate(() => {
+    deliveryNotificationService.dispatchStatusChange(previousStatus, formatted).catch(() => {});
+  });
+  return formatted;
+}
+
 /** Sync order status into delivery sessions after store updates */
 async function syncOrderInSessions(orderId) {
   const oid = requireObjectId(orderId, "orderId");
@@ -345,7 +395,10 @@ async function syncOrderInSessions(orderId) {
   if (!doc) return;
 
   const previousStatus = normalizeSessionStatus(doc.status);
+  if (TERMINAL_SESSION_STATUSES.has(previousStatus)) return;
+
   let changed = false;
+  const REJECTED_ORDER_STATUSES = new Set(["rejected", "cancelled"]);
 
   doc.storeStops = (doc.storeStops || []).map((stop) => {
     if (String(stop.order) !== String(oid)) return stop;
@@ -355,6 +408,28 @@ async function syncOrderInSessions(orderId) {
   });
 
   if (!changed) return;
+
+  const hasRejectedStop = (doc.storeStops || []).some((stop) =>
+    REJECTED_ORDER_STATUSES.has(stop.orderStatus)
+  );
+
+  if (hasRejectedStop) {
+    doc.status = SESSION_STATUSES.CANCELLED;
+    pushTimeline(doc, SESSION_STATUSES.CANCELLED, "رفض أحد المتاجر الطلب — تم إلغاء طلب التوصيل");
+    doc.markModified("storeStops");
+    await doc.save();
+
+    await Order.updateMany(
+      { _id: { $in: doc.orders || [] }, deliveryGroup: doc._id },
+      { $unset: { deliveryGroup: 1 } },
+    );
+
+    const formatted = formatSessionDetails(doc);
+    setImmediate(() => {
+      deliveryNotificationService.dispatchStatusChange(previousStatus, formatted).catch(() => {});
+    });
+    return;
+  }
 
   if (
     previousStatus === SESSION_STATUSES.WAITING_FOR_STORES &&
@@ -391,8 +466,9 @@ async function getDashboardStats(user) {
   const deliveredStatuses = [...DELIVERED_SESSION_STATUSES];
   const rejectedStatuses = [...REJECTED_SESSION_STATUSES];
 
-  const [pendingConfirmation, sentOrders, delivered, rejected] = await Promise.all([
+  const [pendingConfirmation, assignedToDriver, sentOrders, delivered, rejected] = await Promise.all([
     DeliverySession.countDocuments({ ...baseQuery, status: { $in: newStatuses } }),
+    DeliverySession.countDocuments({ ...baseQuery, status: { $in: [...ASSIGNED_COMPANY_STATUSES] } }),
     DeliverySession.countDocuments({ ...baseQuery, status: { $in: sentStatuses } }),
     DeliverySession.countDocuments({ ...baseQuery, status: { $in: deliveredStatuses } }),
     DeliverySession.countDocuments({ ...baseQuery, status: { $in: rejectedStatuses } }),
@@ -400,6 +476,7 @@ async function getDashboardStats(user) {
 
   return {
     pendingConfirmation,
+    assignedToDriver,
     sentOrders,
     delivered,
     rejected,
@@ -419,6 +496,8 @@ async function listSessionsForCompany(user, { status, history = false } = {}) {
     };
   } else if (status === "new") {
     query.status = { $in: [...NEW_COMPANY_REQUEST_STATUSES] };
+  } else if (status === "assigned") {
+    query.status = { $in: [...ASSIGNED_COMPANY_STATUSES] };
   } else if (status === "sent" || status === "out_for_delivery") {
     query.status = { $in: [...SENT_ORDER_STATUSES] };
   } else if (status === "accepted") {
@@ -451,14 +530,35 @@ async function getSessionForCompany(user, sessionId) {
   return formatSessionDetails(await refreshStoreStopsFromOrders(session));
 }
 
+async function syncOrdersOnDriverAssigned(sessionDoc) {
+  const orderIds = (sessionDoc.orders || []).map((o) => o._id || o);
+  if (!orderIds.length) return;
+
+  const orders = await Order.find({
+    _id: { $in: orderIds },
+    status: "ready_for_delivery_pickup",
+  }).select("_id statusTimeline");
+
+  for (const order of orders) {
+    await Order.findOneAndUpdate(
+      { _id: order._id, status: "ready_for_delivery_pickup" },
+      {
+        $set: {
+          status: "ready_for_driver_pickup",
+          statusTimeline: pushTimelineUpdate(order.statusTimeline, "ready_for_driver_pickup"),
+        },
+      }
+    );
+  }
+}
+
 async function assignDriverToSession(user, sessionId, { driverId, note = "" } = {}) {
   const preview = await getSessionForCompany(user, sessionId);
   const normalized = normalizeSessionStatus(preview.status);
   const assignable = new Set([
     ...NEW_COMPANY_REQUEST_STATUSES,
-    ...ACCEPTED_COMPANY_STATUSES,
+    ...ASSIGNED_COMPANY_STATUSES,
     SESSION_STATUSES.READY_FOR_PICKUP,
-    SESSION_STATUSES.ACCEPTED,
   ]);
   if (!assignable.has(normalized) && !assignable.has(preview.status)) {
     const err = new Error("لا يمكن تعيين سائق لهذا الطلب");
@@ -480,14 +580,17 @@ async function assignDriverToSession(user, sessionId, { driverId, note = "" } = 
     note: assignmentNote,
     assignedAt: new Date(),
   };
-  doc.status = SESSION_STATUSES.OUT_FOR_DELIVERY;
+  doc.status = SESSION_STATUSES.DRIVER_ASSIGNED;
   const timelineNote = assignmentNote
     ? `تعيين السائق ${driver.name} — ${assignmentNote}`
     : `تعيين السائق ${driver.name}`;
-  pushTimeline(doc, SESSION_STATUSES.OUT_FOR_DELIVERY, timelineNote);
+  pushTimeline(doc, SESSION_STATUSES.DRIVER_ASSIGNED, timelineNote);
   await doc.save();
 
-  const formatted = formatSessionDetails(doc);
+  await syncOrdersOnDriverAssigned(doc);
+
+  const company = await DeliveryCompany.findById(doc.deliveryCompany).select("name phone whatsapp").lean();
+  const formatted = formatSessionDetails(doc, company);
   setImmediate(() => {
     deliveryNotificationService.dispatchStatusChange(previousStatus, formatted, {
       driverName: driver.name,
@@ -579,7 +682,24 @@ async function completeSession(user, sessionId) {
   pushTimeline(doc, SESSION_STATUSES.COMPLETED, "تم تسليم الطلبات للزبون");
   await doc.save();
 
-  const formatted = formatSessionDetails(doc);
+  const now = new Date();
+  const deleteAfter = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
+  const orderIds = (doc.orders || []).map((o) => o._id || o);
+  if (orderIds.length) {
+    await Order.updateMany(
+      { _id: { $in: orderIds }, status: { $in: ["delivery_handover_complete", "delivered_to_driver"] } },
+      {
+        $set: {
+          status: "delivered_to_customer",
+          completedAt: now,
+          deleteAfter,
+        },
+      },
+    );
+  }
+
+  const company = await DeliveryCompany.findById(doc.deliveryCompany).select("name phone whatsapp").lean();
+  const formatted = formatSessionDetails(doc, company);
   setImmediate(() => {
     deliveryNotificationService.dispatchStatusChange(previousStatus, formatted).catch(() => {});
   });
@@ -600,6 +720,7 @@ async function cancelSession(customerId, sessionId, reason = "") {
     SESSION_STATUSES.WAITING,
     SESSION_STATUSES.WAITING_FOR_STORES,
     SESSION_STATUSES.READY_FOR_PICKUP,
+    SESSION_STATUSES.DRIVER_ASSIGNED,
   ]);
   if (!cancellable.has(current)) {
     const err = new Error("لا يمكن إلغاء هذه الجلسة في حالتها الحالية");
@@ -626,7 +747,9 @@ module.exports = {
   listSessionsForCustomer,
   calculateSessionFee,
   syncOrderInSessions,
+  syncAfterStoreHandover,
   cancelSession,
+  refreshStoreStopsFromOrders,
   getDashboardStats,
   listSessionsForCompany,
   getSessionForCompany,

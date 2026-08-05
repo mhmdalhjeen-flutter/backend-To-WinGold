@@ -54,6 +54,9 @@ const ORDER_STATUS_VALUES = Object.values(ORDER_STATUSES);
 const LEGACY_TO_CANONICAL_STATUS = {
   pending: ORDER_STATUSES.PENDING_REVIEW,
   store_accepted: ORDER_STATUSES.CONFIRMED,
+  ready_for_delivery_pickup: ORDER_STATUSES.CONFIRMED,
+  ready_for_driver_pickup: ORDER_STATUSES.CONFIRMED,
+  delivery_handover_complete: ORDER_STATUSES.CONFIRMED,
   confirmed: ORDER_STATUSES.CONFIRMED,
   preparing: ORDER_STATUSES.CONFIRMED,
   delivered_to_driver: ORDER_STATUSES.CONFIRMED,

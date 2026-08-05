@@ -45,7 +45,7 @@ exports.assignDriver = async (req, res) => {
       req.params.requestId,
       { driverId: req.body.driverId, note: req.body.note },
     );
-    res.json({ request, session: request, trip: request, message: "تم تعيين السائق وبدء التوصيل" });
+    res.json({ request, session: request, trip: request, message: "تم تعيين السائق بنجاح" });
   } catch (err) {
     res.status(err.status || 400).json({ message: err.message });
   }
@@ -250,6 +250,29 @@ exports.deleteDriver = async (req, res) => {
   try {
     await deliveryCompanyDriverService.deleteDriver(req.userDoc || req.user, req.params.driverId);
     res.json({ message: "تم حذف السائق" });
+  } catch (err) {
+    res.status(err.status || 400).json({ message: err.message });
+  }
+};
+
+exports.getDriverRegistrationPasswordStatus = async (req, res) => {
+  try {
+    const deliveryDriverService = require("../services/deliveryDriver.service");
+    const data = await deliveryDriverService.getDriverRegistrationPasswordStatus(req.userDoc || req.user);
+    res.json(data);
+  } catch (err) {
+    res.status(err.status || 500).json({ message: err.message });
+  }
+};
+
+exports.setDriverRegistrationPassword = async (req, res) => {
+  try {
+    const deliveryDriverService = require("../services/deliveryDriver.service");
+    const data = await deliveryDriverService.setDriverRegistrationPassword(
+      req.userDoc || req.user,
+      req.body,
+    );
+    res.json({ ...data, message: "تم حفظ كلمة مرور تسجيل السائقين" });
   } catch (err) {
     res.status(err.status || 400).json({ message: err.message });
   }

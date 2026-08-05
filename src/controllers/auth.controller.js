@@ -366,9 +366,24 @@ const login = async (req, res) => {
     }
 
     if (!user.password) {
+      if (appType === "delivery" && user.role === "delivery_company" && !user.portalActivated) {
+        await logAttempt(false, "حساب بانتظار التفعيل");
+        return res.status(403).json({
+          message: "الحساب لم يُفعّل بعد — أنشئ كلمة المرور من شاشة التفعيل",
+          code: "PORTAL_NOT_ACTIVATED",
+        });
+      }
       await logAttempt(false, "حساب بدون كلمة مرور");
       return res.status(400).json({
         message: "هذا الحساب لا يدعم تسجيل الدخول بكلمة المرور"
+      });
+    }
+
+    if (appType === "delivery" && user.role === "delivery_company" && !user.portalActivated) {
+      await logAttempt(false, "حساب بانتظار التفعيل");
+      return res.status(403).json({
+        message: "الحساب لم يُفعّل بعد — أنشئ كلمة المرور من شاشة التفعيل",
+        code: "PORTAL_NOT_ACTIVATED",
       });
     }
 
@@ -411,18 +426,43 @@ const login = async (req, res) => {
         });
       }
 
-      if (appType === "delivery" && user.role !== "delivery_company") {
-        await logAttempt(false, "دور غير متطابق — بوابة شركة التوصيل", user);
+      if (appType === "delivery" && !["delivery_company", "delivery_driver"].includes(user.role)) {
+        await logAttempt(false, "دور غير متطابق — بوابة التوصيل", user);
         return res.status(403).json({
-          message: "هذا الحساب غير مخصص لبوابة شركة التوصيل"
+          message: "هذا الحساب غير مخصص لبوابة التوصيل"
         });
       }
 
-      if (appType === "delivery" && !user.deliveryCompanyId) {
+      if (appType === "delivery" && user.role === "delivery_company" && !user.portalActivated) {
+        await logAttempt(false, "حساب بانتظار التفعيل");
+        return res.status(403).json({
+          message: "الحساب لم يُفعّل بعد — أنشئ كلمة المرور من شاشة التفعيل",
+          code: "PORTAL_NOT_ACTIVATED",
+        });
+      }
+
+      if (appType === "delivery" && user.role === "delivery_company" && !user.deliveryCompanyId) {
         await logAttempt(false, "شركة غير مربوطة", user);
         return res.status(403).json({
           message: "حساب الشركة غير مربوط بشركة توصيل — تواصل مع الإدارة"
         });
+      }
+
+      if (appType === "delivery" && user.role === "delivery_driver") {
+        if (!user.deliveryDriverId) {
+          await logAttempt(false, "سائق غير مربوط", user);
+          return res.status(403).json({
+            message: "حساب السائق غير مربوط — تواصل مع شركة التوصيل"
+          });
+        }
+        const DeliveryCompanyDriver = require("../models/deliveryCompanyDriver");
+        const driverRecord = await DeliveryCompanyDriver.findById(user.deliveryDriverId).select("isActive");
+        if (!driverRecord?.isActive) {
+          await logAttempt(false, "سائق معطّل", user);
+          return res.status(403).json({
+            message: "حساب السائق معطّل — تواصل مع شركة التوصيل"
+          });
+        }
       }
     }
 
@@ -916,6 +956,105 @@ const getVerificationStatus = async (req, res) => {
 };
 
 
+const checkDeliveryPortalPhone = async (req, res) => {
+  try {
+    assertAuthBody(req.body, "deliveryCheck");
+    const phone = normalizeLocalPhone(cleanString(req.body.phone, { field: "phone", max: 32, required: true }));
+    if (!phone) {
+      return res.status(400).json({ message: "رقم الهاتف غير صالح" });
+    }
+
+    const user = await User.findOne({ phone, role: "delivery_company" });
+    if (!user) {
+      return res.status(404).json({
+        message: "رقم الهاتف غير مسجل — تواصل مع الإدارة",
+        exists: false,
+        activated: false,
+      });
+    }
+
+    return res.json({
+      exists: true,
+      activated: Boolean(user.portalActivated),
+      message: user.portalActivated
+        ? "الحساب مفعّل — استخدم تسجيل الدخول"
+        : "يمكنك تفعيل حسابك الآن",
+    });
+  } catch (err) {
+    return res.status(err.status || 500).json({ message: err.message });
+  }
+};
+
+const verifyDriverRegistrationPassword = async (req, res) => {
+  try {
+    const deliveryDriverService = require("../services/deliveryDriver.service");
+    const result = await deliveryDriverService.verifyDriverRegistrationPassword(
+      req.body?.registrationPassword,
+    );
+    return res.json(result);
+  } catch (err) {
+    return res.status(err.status || 400).json({ message: err.message });
+  }
+};
+
+const registerDeliveryDriver = async (req, res) => {
+  try {
+    const deliveryDriverService = require("../services/deliveryDriver.service");
+    const { user, companyName } = await deliveryDriverService.registerDriver(req.body);
+    const response = await buildAuthResponse(user, req, {
+      message: `تم التسجيل بنجاح — ${companyName}`,
+    });
+    return res.status(201).json(response);
+  } catch (err) {
+    return res.status(err.status || 400).json({ message: err.message });
+  }
+};
+
+const activateDeliveryPortal = async (req, res) => {
+  try {
+    assertAuthBody(req.body, "deliveryActivate");
+    const phone = normalizeLocalPhone(cleanString(req.body.phone, { field: "phone", max: 32, required: true }));
+    const password = cleanAuthPassword(req.body.password);
+    const confirmPassword = cleanAuthPassword(req.body.confirmPassword, { field: "confirmPassword" });
+
+    if (!phone) {
+      return res.status(400).json({ message: "رقم الهاتف غير صالح" });
+    }
+    if (password !== confirmPassword) {
+      return res.status(400).json({ message: "كلمتا المرور غير متطابقتين" });
+    }
+
+    const user = await User.findOne({ phone, role: "delivery_company" });
+    if (!user) {
+      return res.status(404).json({ message: "رقم الهاتف غير مسجل — تواصل مع الإدارة" });
+    }
+    if (user.portalActivated) {
+      return res.status(400).json({
+        message: "الحساب مفعّل مسبقاً — سجّل الدخول",
+        code: "ALREADY_ACTIVATED",
+      });
+    }
+    if (!user.deliveryCompanyId) {
+      return res.status(400).json({ message: "حساب الشركة غير مربوط — تواصل مع الإدارة" });
+    }
+    if (user.status === "banned" || user.status === "suspended") {
+      return res.status(403).json({ message: "تم تعليق هذا الحساب — تواصل مع الإدارة" });
+    }
+
+    user.password = await bcrypt.hash(password, 10);
+    user.portalActivated = true;
+    await user.save();
+
+    const response = await buildAuthResponse(user, req, {
+      message: "تم تفعيل الحساب بنجاح",
+    });
+    return res.json(response);
+  } catch (err) {
+    return res.status(err.status || 500).json({ message: err.message });
+  }
+};
+
+
 module.exports = {
   registerCustomer,
   registerBusiness,
@@ -930,4 +1069,9 @@ module.exports = {
   confirmVerification,
   confirmEmailLink,
   getVerificationStatus,
+  checkDeliveryPortalPhone,
+  activateDeliveryPortal,
+  verifyDriverRegistrationPassword,
+  registerDeliveryDriver,
+  buildAuthResponse,
 };

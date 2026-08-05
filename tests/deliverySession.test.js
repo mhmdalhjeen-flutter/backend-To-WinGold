@@ -55,20 +55,39 @@ test("Scenario 2: partial store approval → waiting_for_stores", () => {
   assert.strictEqual(allStoresApproved(stops), false);
 });
 
+test("Scenario 2b: pending order only → waiting_for_stores (company waits for store)", () => {
+  const stops = [{ orderStatus: "pending" }];
+  assert.strictEqual(deriveInitialSubmittedStatus(stops), SESSION_STATUSES.WAITING_FOR_STORES);
+  assert.strictEqual(allStoresApproved(stops), false);
+});
+
 // Scenario 3 — all stores approve
 test("Scenario 3: all stores approved → ready_for_pickup", () => {
   const stops = [
+    { orderStatus: "ready_for_delivery_pickup" },
     { orderStatus: "store_accepted" },
-    { orderStatus: "preparing" },
-    { orderStatus: "delivered_to_driver" },
   ];
   assert.strictEqual(allStoresApproved(stops), true);
   assert.strictEqual(deriveInitialSubmittedStatus(stops), SESSION_STATUSES.READY_FOR_PICKUP);
 });
 
+test("Scenario 3b: delivery order accepted by store → ready_for_pickup for company", () => {
+  const stops = [{ orderStatus: "ready_for_delivery_pickup" }];
+  assert.strictEqual(allStoresApproved(stops), true);
+  assert.strictEqual(deriveInitialSubmittedStatus(stops), SESSION_STATUSES.READY_FOR_PICKUP);
+});
+
+test("Scenario 5: store rejection stops count as not approved", () => {
+  const stops = [
+    { orderStatus: "ready_for_delivery_pickup" },
+    { orderStatus: "rejected" },
+  ];
+  assert.strictEqual(allStoresApproved(stops), false);
+});
+
 // Scenario 4 — status normalization (legacy → canonical)
 test("Scenario 4: legacy status mapping", () => {
-  assert.strictEqual(normalizeSessionStatus("driver_assigned"), SESSION_STATUSES.ACCEPTED);
+  assert.strictEqual(normalizeSessionStatus("driver_assigned"), SESSION_STATUSES.DRIVER_ASSIGNED);
   assert.strictEqual(normalizeSessionStatus("on_the_way"), SESSION_STATUSES.OUT_FOR_DELIVERY);
   assert.strictEqual(normalizeSessionStatus("delivered"), SESSION_STATUSES.COMPLETED);
   assert.strictEqual(normalizeSessionStatus("collecting_orders"), SESSION_STATUSES.OUT_FOR_DELIVERY);
