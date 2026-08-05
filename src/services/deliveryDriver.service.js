@@ -364,12 +364,24 @@ async function completeDelivery(user, sessionId, body = {}) {
   const orderIds = (session.orders || []).map((o) => o._id || o);
   if (orderIds.length) {
     await Order.updateMany(
-      { _id: { $in: orderIds } },
+      {
+        _id: { $in: orderIds },
+        status: {
+          $nin: ["delivered_to_customer", "delivered", "rejected", "cancelled", "completed_off_platform"],
+        },
+      },
       {
         $set: {
           status: "delivered_to_customer",
           completedAt: now,
           deleteAfter,
+        },
+        $push: {
+          statusTimeline: {
+            status: "delivered_to_customer",
+            at: now,
+            note: note || "تم التسليم بنجاح",
+          },
         },
       },
     );

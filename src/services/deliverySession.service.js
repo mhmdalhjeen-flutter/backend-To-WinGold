@@ -11,6 +11,7 @@ const {
   getCustomerStatusLabel,
   getCompanyStatusLabel,
   NEW_COMPANY_REQUEST_STATUSES,
+  ASSIGNABLE_COMPANY_STATUSES,
   ACCEPTED_COMPANY_STATUSES,
   ASSIGNED_COMPANY_STATUSES,
   OUT_FOR_DELIVERY_STATUSES,
@@ -37,6 +38,13 @@ const { safeLog } = require("../utils/logSanitize.util");
 function pushTimeline(doc, status, note = "") {
   doc.statusTimeline = doc.statusTimeline || [];
   doc.statusTimeline.push({ status, at: new Date(), note });
+}
+
+/** Immutable timeline helper for Order documents */
+function pushTimelineUpdate(timeline, status, note = "") {
+  const list = Array.isArray(timeline) ? [...timeline] : [];
+  list.push({ status, at: new Date(), note: note || "" });
+  return list;
 }
 
 async function resolveCompany(companyId) {
@@ -250,21 +258,90 @@ async function calculateSessionFee(companyId, orderCount) {
 /**
  * Confirm/submit a delivery session — idempotent by sessionId.
  * Only delivery-method orders are linked; pickup/nearby orders are rejected.
+ * When sessionId already exists, new orders are merged into the same request.
  */
 async function confirmSession(customerId, body = {}) {
   const sessionId = body.sessionId
     ? cleanString(body.sessionId, { field: "sessionId", max: 120 })
     : "";
 
-  if (sessionId) {
-    const existing = await DeliverySession.findOne({ customer: customerId, sessionId });
-    if (existing) return formatSessionDetails(existing);
-  }
-
   const company = await resolveCompany(body.companyId);
   const orders = await fetchDeliveryOrders(customerId, body.orderIds || []);
   const customer = await User.findById(customerId).select("name phone whatsapp address preferences").lean();
-  const storeStops = await buildStoreStops(orders);
+  const newStops = await buildStoreStops(orders);
+
+  if (sessionId) {
+    const existing = await DeliverySession.findOne({ customer: customerId, sessionId });
+    if (existing) {
+      if (TERMINAL_SESSION_STATUSES.has(normalizeSessionStatus(existing.status))) {
+        const err = new Error("لا يمكن إضافة طلبات إلى جلسة توصيل منتهية");
+        err.status = 400;
+        throw err;
+      }
+      if (String(existing.deliveryCompany) !== String(company._id)) {
+        const err = new Error("جلسة التوصيل مرتبطة بشركة أخرى");
+        err.status = 400;
+        throw err;
+      }
+
+      const existingOrderIds = new Set((existing.orders || []).map((o) => String(o._id || o)));
+      const toAdd = orders.filter((o) => !existingOrderIds.has(String(o._id)));
+      if (!toAdd.length) {
+        return formatSessionDetails(existing, company);
+      }
+
+      const stopsToAdd = newStops.filter((s) => toAdd.some((o) => String(o._id) === String(s.order)));
+      existing.orders = [...(existing.orders || []), ...toAdd.map((o) => o._id)];
+      existing.storeStops = [...(existing.storeStops || []), ...stopsToAdd];
+
+      const feeBreakdown = deliveryPricingService.calculateFeeFromCompany(company, existing.orders.length);
+      existing.feeBreakdown = feeBreakdown;
+      existing.deliveryFee = feeBreakdown.totalFee;
+      existing.currency = feeBreakdown.currency;
+
+      const previousStatus = normalizeSessionStatus(existing.status);
+      if (
+        previousStatus === SESSION_STATUSES.READY_FOR_PICKUP
+        && !allStoresApproved(existing.storeStops)
+      ) {
+        existing.status = SESSION_STATUSES.WAITING_FOR_STORES;
+        pushTimeline(existing, SESSION_STATUSES.WAITING_FOR_STORES, "أُضيفت طلبات جديدة بانتظار موافقة المتجر");
+      } else if (
+        previousStatus === SESSION_STATUSES.WAITING_FOR_STORES
+        && allStoresApproved(existing.storeStops)
+      ) {
+        existing.status = SESSION_STATUSES.READY_FOR_PICKUP;
+        pushTimeline(existing, SESSION_STATUSES.READY_FOR_PICKUP, "جميع المتاجر وافقت على الطلبات");
+      } else {
+        pushTimeline(existing, existing.status, `أُضيف ${toAdd.length} طلب(ات) إلى رحلة التوصيل`);
+      }
+
+      existing.markModified("storeStops");
+      existing.markModified("orders");
+      existing.markModified("feeBreakdown");
+      await existing.save();
+
+      await Order.updateMany(
+        { _id: { $in: toAdd.map((o) => o._id) } },
+        { $set: { deliveryGroup: existing._id } },
+      );
+
+      const formatted = formatSessionDetails(existing, company);
+      setImmediate(() => {
+        for (const stop of stopsToAdd) {
+          if (!stop.storeOwnerId) continue;
+          deliveryNotificationService.onStoreOrderUpdated(formatted, {
+            ...stop,
+            orderStatusLabel: STORE_STOP_LABELS[stop.orderStatus] || stop.orderStatus,
+          }).catch(() => {});
+        }
+        if (normalizeSessionStatus(existing.status) !== previousStatus) {
+          deliveryNotificationService.dispatchStatusChange(previousStatus, formatted).catch(() => {});
+        }
+      });
+      return formatted;
+    }
+  }
 
   const feeBreakdown = deliveryPricingService.calculateFeeFromCompany(company, orders.length);
   const clientFee = Number(body.deliveryFee);
@@ -284,14 +361,14 @@ async function confirmSession(customerId, body = {}) {
   const isCash = paymentMethod === "cash_on_delivery";
   const paymentStatus = isCash ? PAYMENT_STATUSES.PENDING : (receiptImage ? PAYMENT_STATUSES.PAID : PAYMENT_STATUSES.PENDING);
 
-  const initialStatus = deriveInitialSubmittedStatus(storeStops);
+  const initialStatus = deriveInitialSubmittedStatus(newStops);
 
   const doc = await DeliverySession.create({
     sessionId,
     customer: customerId,
     deliveryCompany: company._id,
     orders: orders.map((o) => o._id),
-    storeStops,
+    storeStops: newStops,
     status: initialStatus,
     statusTimeline: [{ status: initialStatus, at: new Date(), note: "تم تأكيد طلب التوصيل" }],
     deliveryAddress: orders[0]?.deliveryAddress || customer?.address || "",
@@ -336,7 +413,7 @@ async function confirmSession(customerId, body = {}) {
     { $set: { deliveryGroup: doc._id } },
   );
 
-  const formatted = formatSessionDetails(doc);
+  const formatted = formatSessionDetails(doc, company);
   setImmediate(() => {
     deliveryNotificationService.onSessionCreated(formatted).catch(() => {});
     if (initialStatus === SESSION_STATUSES.READY_FOR_PICKUP) {
@@ -424,7 +501,8 @@ async function syncOrderInSessions(orderId) {
       { $unset: { deliveryGroup: 1 } },
     );
 
-    const formatted = formatSessionDetails(doc);
+    const company = await DeliveryCompany.findById(doc.deliveryCompany).select("name phone whatsapp").lean();
+    const formatted = formatSessionDetails(doc, company);
     setImmediate(() => {
       deliveryNotificationService.dispatchStatusChange(previousStatus, formatted).catch(() => {});
     });
@@ -442,7 +520,8 @@ async function syncOrderInSessions(orderId) {
   doc.markModified("storeStops");
   await doc.save();
 
-  const formatted = formatSessionDetails(doc);
+  const company = await DeliveryCompany.findById(doc.deliveryCompany).select("name phone whatsapp").lean();
+  const formatted = formatSessionDetails(doc, company);
   setImmediate(() => {
     deliveryNotificationService.dispatchStatusChange(previousStatus, formatted).catch(() => {});
   });
@@ -509,8 +588,19 @@ async function listSessionsForCompany(user, { status, history = false } = {}) {
   } else if (status) {
     query.status = status;
   } else {
+    // Default company inbox: include waiting-for-store through active delivery
     query.status = {
-      $nin: [SESSION_STATUSES.WAITING, SESSION_STATUSES.WAITING_FOR_STORES],
+      $in: [
+        SESSION_STATUSES.WAITING_FOR_STORES,
+        SESSION_STATUSES.READY_FOR_PICKUP,
+        SESSION_STATUSES.DRIVER_ASSIGNED,
+        SESSION_STATUSES.ACCEPTED,
+        SESSION_STATUSES.OUT_FOR_DELIVERY,
+        "waiting_for_acceptance",
+        "collecting_orders",
+        "on_delivery",
+        "on_the_way",
+      ],
     };
   }
 
@@ -527,7 +617,8 @@ async function getSessionForCompany(user, sessionId) {
     err.status = 404;
     throw err;
   }
-  return formatSessionDetails(await refreshStoreStopsFromOrders(session));
+  const company = await DeliveryCompany.findById(companyId).select("name phone whatsapp").lean();
+  return formatSessionDetails(await refreshStoreStopsFromOrders(session), company);
 }
 
 async function syncOrdersOnDriverAssigned(sessionDoc) {
@@ -556,12 +647,15 @@ async function assignDriverToSession(user, sessionId, { driverId, note = "" } = 
   const preview = await getSessionForCompany(user, sessionId);
   const normalized = normalizeSessionStatus(preview.status);
   const assignable = new Set([
-    ...NEW_COMPANY_REQUEST_STATUSES,
+    ...ASSIGNABLE_COMPANY_STATUSES,
     ...ASSIGNED_COMPANY_STATUSES,
-    SESSION_STATUSES.READY_FOR_PICKUP,
   ]);
   if (!assignable.has(normalized) && !assignable.has(preview.status)) {
-    const err = new Error("لا يمكن تعيين سائق لهذا الطلب");
+    const err = new Error(
+      normalized === SESSION_STATUSES.WAITING_FOR_STORES
+        ? "انتظر موافقة المتجر قبل تعيين سائق"
+        : "لا يمكن تعيين سائق لهذا الطلب"
+    );
     err.status = 400;
     throw err;
   }
@@ -596,6 +690,7 @@ async function assignDriverToSession(user, sessionId, { driverId, note = "" } = 
       driverName: driver.name,
       driverPhone: driver.phone,
       driverWhatsapp: driver.whatsapp || driver.phone,
+      driverId: driver._id,
     }).catch(() => {});
   });
   return formatted;
@@ -604,7 +699,11 @@ async function assignDriverToSession(user, sessionId, { driverId, note = "" } = 
 async function rejectSession(user, sessionId, reason = "") {
   const preview = await getSessionForCompany(user, sessionId);
   const normalized = normalizeSessionStatus(preview.status);
-  const rejectable = new Set([...NEW_COMPANY_REQUEST_STATUSES, SESSION_STATUSES.READY_FOR_PICKUP]);
+  const rejectable = new Set([
+    ...NEW_COMPANY_REQUEST_STATUSES,
+    SESSION_STATUSES.WAITING_FOR_STORES,
+    SESSION_STATUSES.READY_FOR_PICKUP,
+  ]);
   if (!rejectable.has(normalized) && !rejectable.has(preview.status)) {
     const err = new Error("لا يمكن رفض هذا الطلب في حالته الحالية");
     err.status = 400;
@@ -624,7 +723,8 @@ async function rejectSession(user, sessionId, reason = "") {
     { $unset: { deliveryGroup: 1 } },
   );
 
-  const formatted = formatSessionDetails(doc);
+  const company = await DeliveryCompany.findById(doc.deliveryCompany).select("name phone whatsapp").lean();
+  const formatted = formatSessionDetails(doc, company);
   setImmediate(() => {
     deliveryNotificationService.dispatchStatusChange(previousStatus, formatted, { rejectReason: note }).catch(() => {});
   });
@@ -641,9 +741,14 @@ async function markOutForDelivery(user, sessionId) {
   }
 
   const current = normalizeSessionStatus(doc.status);
-  const allowed = new Set([...ACCEPTED_COMPANY_STATUSES, SESSION_STATUSES.ACCEPTED]);
+  const allowed = new Set([
+    ...ACCEPTED_COMPANY_STATUSES,
+    ...ASSIGNED_COMPANY_STATUSES,
+    SESSION_STATUSES.ACCEPTED,
+    SESSION_STATUSES.DRIVER_ASSIGNED,
+  ]);
   if (!allowed.has(current) && !allowed.has(doc.status)) {
-    const err = new Error("يجب قبول الطلب قبل تحديده كقيد التوصيل");
+    const err = new Error("يجب تعيين سائق قبل تحديد الطلب كقيد التوصيل");
     err.status = 400;
     throw err;
   }
@@ -653,7 +758,8 @@ async function markOutForDelivery(user, sessionId) {
   pushTimeline(doc, SESSION_STATUSES.OUT_FOR_DELIVERY, "الطلب قيد التوصيل");
   await doc.save();
 
-  const formatted = formatSessionDetails(doc);
+  const company = await DeliveryCompany.findById(doc.deliveryCompany).select("name phone whatsapp").lean();
+  const formatted = formatSessionDetails(doc, company);
   setImmediate(() => {
     deliveryNotificationService.dispatchStatusChange(previousStatus, formatted).catch(() => {});
   });
@@ -687,7 +793,19 @@ async function completeSession(user, sessionId) {
   const orderIds = (doc.orders || []).map((o) => o._id || o);
   if (orderIds.length) {
     await Order.updateMany(
-      { _id: { $in: orderIds }, status: { $in: ["delivery_handover_complete", "delivered_to_driver"] } },
+      {
+        _id: { $in: orderIds },
+        status: {
+          $in: [
+            "delivery_handover_complete",
+            "delivered_to_driver",
+            "ready_for_driver_pickup",
+            "ready_for_delivery_pickup",
+            "preparing",
+            "store_accepted",
+          ],
+        },
+      },
       {
         $set: {
           status: "delivered_to_customer",

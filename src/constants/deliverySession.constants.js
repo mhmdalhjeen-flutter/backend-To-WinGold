@@ -50,12 +50,14 @@ const CUSTOMER_STATUS_LABELS = {
 /** Company portal labels */
 const COMPANY_STATUS_LABELS = {
   ...SESSION_STATUS_LABELS,
-  [SESSION_STATUSES.READY_FOR_PICKUP]: "جاهز للاستلام",
+  [SESSION_STATUSES.WAITING_FOR_STORES]: "بانتظار تأكيد المتجر",
+  [SESSION_STATUSES.READY_FOR_PICKUP]: "جاهز لتعيين سائق",
   [SESSION_STATUSES.DRIVER_ASSIGNED]: "معيّن لسائق",
   [SESSION_STATUSES.OUT_FOR_DELIVERY]: "قيد التوصيل",
 };
 
 const COMPANY_VISIBLE_STATUSES = new Set([
+  SESSION_STATUSES.WAITING_FOR_STORES,
   SESSION_STATUSES.READY_FOR_PICKUP,
   SESSION_STATUSES.DRIVER_ASSIGNED,
   SESSION_STATUSES.ACCEPTED,
@@ -65,7 +67,21 @@ const COMPANY_VISIBLE_STATUSES = new Set([
   SESSION_STATUSES.CANCELLED,
 ]);
 
-const NEW_COMPANY_REQUEST_STATUSES = new Set([SESSION_STATUSES.READY_FOR_PICKUP, "waiting_for_acceptance"]);
+/**
+ * Company "new requests" inbox — includes waiting-for-store and ready-for-assignment.
+ * Drivers may only be assigned when status is ready_for_pickup (see ASSIGNABLE_COMPANY_STATUSES).
+ */
+const NEW_COMPANY_REQUEST_STATUSES = new Set([
+  SESSION_STATUSES.WAITING_FOR_STORES,
+  SESSION_STATUSES.READY_FOR_PICKUP,
+  "waiting_for_acceptance",
+]);
+
+/** Statuses where the company may assign / reassign a driver */
+const ASSIGNABLE_COMPANY_STATUSES = new Set([
+  SESSION_STATUSES.READY_FOR_PICKUP,
+  "waiting_for_acceptance",
+]);
 
 const ACCEPTED_COMPANY_STATUSES = new Set([SESSION_STATUSES.ACCEPTED]);
 
@@ -195,6 +211,7 @@ module.exports = {
   COMPANY_STATUS_LABELS,
   COMPANY_VISIBLE_STATUSES,
   NEW_COMPANY_REQUEST_STATUSES,
+  ASSIGNABLE_COMPANY_STATUSES,
   ACCEPTED_COMPANY_STATUSES,
   ASSIGNED_COMPANY_STATUSES,
   OUT_FOR_DELIVERY_STATUSES,

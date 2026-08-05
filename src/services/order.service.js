@@ -558,20 +558,9 @@ async function updateOrderStatusCore(ownerId, orderId, status, session, options 
       }
     });
 
-    try {
-      await notificationService.create({
-        user: order.customer,
-        type: "order_handed_to_driver",
-        title: "طلبك في الطريق",
-        body: `تم تسليم طلبك من ${store.name || "المتجر"} إلى السائق`,
-        data: {
-          orderId: order._id.toString(),
-          storeId: store._id.toString(),
-        },
-      });
-    } catch (_) {
-      /* non-critical */
-    }
+    // Customer / company / driver notifications are sent by
+    // deliverySession.syncAfterStoreHandover → dispatchStatusChange
+    // when the session advances to out_for_delivery.
 
     return {
       message: "تم تسليم الطلب للسائق — اكتملت مسؤولية المتجر",
@@ -1006,20 +995,7 @@ async function handOrderToDriver(ownerId, orderId) {
     }
   });
 
-  try {
-    await notificationService.create({
-      user: order.customer,
-      type: "order_handed_to_driver",
-      title: "طلبك في الطريق",
-      body: `تم تسليم طلبك من ${store.name || "المتجر"} إلى السائق`,
-      data: {
-        orderId: order._id.toString(),
-        storeId: store._id.toString(),
-      },
-    });
-  } catch (_) {
-    /* non-critical */
-  }
+  // Notifications: syncAfterStoreHandover → dispatchStatusChange (out_for_delivery)
 
   return {
     message: "تم تسليم الطلب للسائق — اكتملت مسؤولية المتجر",
