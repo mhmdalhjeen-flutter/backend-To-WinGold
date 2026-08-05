@@ -470,6 +470,30 @@ async function updateOrderStatusCore(ownerId, orderId, status, session, options 
     };
   }
 
+  if (targetStatus === "ready_for_delivery_pickup" && ["store_accepted", "confirmed"].includes(previousStatus)) {
+    const order = await Order.findOneAndUpdate(
+      { _id: orderId, store: store._id, status: previousStatus },
+      {
+        $set: {
+          status: "ready_for_delivery_pickup",
+          statusTimeline: pushTimelineUpdate(orderPreview.statusTimeline, "ready_for_delivery_pickup"),
+        },
+      },
+      updateOpts
+    );
+    if (!order) {
+      const err = new Error("تم تحديث الطلب بالفعل");
+      err.status = 409;
+      throw err;
+    }
+    return {
+      message: "الطلب جاهز للتسليم لشركة التوصيل",
+      order,
+      cards: store.cards,
+      bypassCards: store.bypassCards,
+    };
+  }
+
   if (targetStatus === "preparing" && ["store_accepted", "ready_for_delivery_pickup", "confirmed"].includes(previousStatus)) {
     const order = await Order.findOneAndUpdate(
       { _id: orderId, store: store._id, status: previousStatus },
@@ -489,9 +513,78 @@ async function updateOrderStatusCore(ownerId, orderId, status, session, options 
     return { message: "الطلب قيد التحضير", order, cards: store.cards, bypassCards: store.bypassCards };
   }
 
-  if (targetStatus === "delivered_to_driver" && previousStatus === "preparing") {
+  // Company-delivery path: older clients may send delivered_to_driver when the
+  // store hands the parcel over — treat it as delivery_handover_complete.
+  if (
+    (targetStatus === "delivered_to_driver" || targetStatus === "delivery_handover_complete")
+    && previousStatus === "ready_for_driver_pickup"
+  ) {
+    if (!orderPreview.deliveryGroup) {
+      const err = new Error("لا يوجد طلب توصيل مرتبط بهذا الطلب");
+      err.status = 400;
+      throw err;
+    }
+
+    const DeliverySession = require("../models/deliverySession");
+    const sessionDoc = await DeliverySession.findById(orderPreview.deliveryGroup).select("assignedDriver status");
+    if (!sessionDoc?.assignedDriver?.driverId) {
+      const err = new Error("لم يُعيَّن سائق بعد — انتظر تعيين السائق من شركة التوصيل");
+      err.status = 400;
+      throw err;
+    }
+
     const order = await Order.findOneAndUpdate(
-      { _id: orderId, store: store._id, status: "preparing" },
+      { _id: orderId, store: store._id, status: "ready_for_driver_pickup" },
+      {
+        $set: {
+          status: "delivery_handover_complete",
+          statusTimeline: pushTimelineUpdate(orderPreview.statusTimeline, "delivery_handover_complete"),
+        },
+      },
+      updateOpts
+    );
+    if (!order) {
+      const err = new Error("تم تحديث الطلب بالفعل");
+      err.status = 409;
+      throw err;
+    }
+
+    setImmediate(() => {
+      try {
+        const deliverySessionService = require("./deliverySession.service");
+        deliverySessionService.syncAfterStoreHandover(order._id).catch(() => {});
+      } catch (_) {
+        /* non-critical */
+      }
+    });
+
+    try {
+      await notificationService.create({
+        user: order.customer,
+        type: "order_handed_to_driver",
+        title: "طلبك في الطريق",
+        body: `تم تسليم طلبك من ${store.name || "المتجر"} إلى السائق`,
+        data: {
+          orderId: order._id.toString(),
+          storeId: store._id.toString(),
+        },
+      });
+    } catch (_) {
+      /* non-critical */
+    }
+
+    return {
+      message: "تم تسليم الطلب للسائق — اكتملت مسؤولية المتجر",
+      order,
+      cards: store.cards,
+      bypassCards: store.bypassCards,
+    };
+  }
+
+  const handToDriverFrom = new Set(["preparing", "store_accepted", "confirmed"]);
+  if (targetStatus === "delivered_to_driver" && handToDriverFrom.has(previousStatus)) {
+    const order = await Order.findOneAndUpdate(
+      { _id: orderId, store: store._id, status: previousStatus },
       {
         $set: {
           status: "delivered_to_driver",
@@ -505,12 +598,31 @@ async function updateOrderStatusCore(ownerId, orderId, status, session, options 
       err.status = 409;
       throw err;
     }
+
+    if (order.deliveryGroup) {
+      setImmediate(() => {
+        try {
+          const deliverySessionService = require("./deliverySession.service");
+          deliverySessionService.syncAfterStoreHandover(order._id).catch(() => {});
+        } catch (_) {
+          /* non-critical */
+        }
+      });
+    }
+
     return { message: "تم تسليم الطلب للسائق", order, cards: store.cards, bypassCards: store.bypassCards };
   }
 
   if (
     (targetStatus === "delivered_to_customer" || status === "delivered") &&
-    ["delivered_to_driver", "preparing", "store_accepted", "ready_for_delivery_pickup", "confirmed"].includes(previousStatus)
+    [
+      "delivered_to_driver",
+      "delivery_handover_complete",
+      "preparing",
+      "store_accepted",
+      "ready_for_delivery_pickup",
+      "confirmed",
+    ].includes(previousStatus)
   ) {
     const now = new Date();
     const deleteAfter = new Date(now.getTime() + HISTORY_RETENTION_DAYS * 24 * 60 * 60 * 1000);
@@ -583,7 +695,7 @@ async function updateOrderStatusCore(ownerId, orderId, status, session, options 
     };
   }
 
-  if (["rejected", "cancelled"].includes(status) && ["store_accepted", "ready_for_delivery_pickup", "confirmed", "preparing"].includes(previousStatus)) {
+  if (["rejected", "cancelled"].includes(status) && ["store_accepted", "ready_for_delivery_pickup", "ready_for_driver_pickup", "confirmed", "preparing"].includes(previousStatus)) {
     const orderBefore = await Order.findOneAndUpdate(
       { _id: orderId, store: store._id, status: previousStatus },
       {

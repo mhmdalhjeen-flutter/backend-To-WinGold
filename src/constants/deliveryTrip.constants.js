@@ -49,6 +49,9 @@ const COMPLETED_TRIP_STATUSES = new Set([
 
 const STORE_STOP_READY_STATUSES = new Set([
   "store_accepted",
+  "ready_for_delivery_pickup",
+  "ready_for_driver_pickup",
+  "delivery_handover_complete",
   "preparing",
   "delivered_to_driver",
   "confirmed",

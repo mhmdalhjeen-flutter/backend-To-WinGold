@@ -1,3 +1,21 @@
+/**
+ * Order status state machine.
+ *
+ * Two parallel fulfillment paths share this table:
+ *
+ * Legacy / store-managed (pickup, nearby, own driver):
+ *   pending → store_accepted → preparing → delivered_to_driver → delivered_to_customer
+ *   preparing is optional — store may hand to driver right after acceptance.
+ *
+ * Company delivery:
+ *   pending → ready_for_delivery_pickup → ready_for_driver_pickup
+ *          → delivery_handover_complete → delivered_to_customer
+ *
+ * Legacy aliases: confirmed ≡ store_accepted, delivered ≡ delivered_to_customer.
+ * delivered_to_driver from ready_for_driver_pickup is accepted as an alias for
+ * delivery_handover_complete (older store clients).
+ */
+
 const ACTIVE_STATUSES = new Set([
   'pending',
   'store_accepted',
@@ -34,13 +52,47 @@ const ALLOWED_STATUSES = [
 ];
 
 const ALLOWED_TRANSITIONS = {
-  pending: new Set(['store_accepted', 'ready_for_delivery_pickup', 'confirmed', 'rejected', 'cancelled']),
-  store_accepted: new Set(['preparing', 'rejected', 'cancelled']),
-  ready_for_delivery_pickup: new Set(['ready_for_driver_pickup', 'rejected', 'cancelled']),
-  ready_for_driver_pickup: new Set(['delivery_handover_complete', 'rejected', 'cancelled']),
+  pending: new Set([
+    'store_accepted',
+    'ready_for_delivery_pickup',
+    'confirmed',
+    'rejected',
+    'cancelled',
+  ]),
+  store_accepted: new Set([
+    'preparing',
+    'delivered_to_driver',
+    'delivered_to_customer',
+    'ready_for_delivery_pickup',
+    'rejected',
+    'cancelled',
+    'completed_off_platform',
+  ]),
+  ready_for_delivery_pickup: new Set([
+    'ready_for_driver_pickup',
+    'preparing',
+    'delivered_to_customer',
+    'rejected',
+    'cancelled',
+    'completed_off_platform',
+  ]),
+  ready_for_driver_pickup: new Set([
+    'delivery_handover_complete',
+    'delivered_to_driver',
+    'rejected',
+    'cancelled',
+  ]),
   delivery_handover_complete: new Set(['delivered_to_customer', 'cancelled']),
-  confirmed: new Set(['preparing', 'rejected', 'cancelled', 'delivered', 'completed_off_platform']),
-  preparing: new Set(['delivered_to_driver', 'cancelled']),
+  confirmed: new Set([
+    'preparing',
+    'delivered_to_driver',
+    'delivered_to_customer',
+    'delivered',
+    'rejected',
+    'cancelled',
+    'completed_off_platform',
+  ]),
+  preparing: new Set(['delivered_to_driver', 'delivered_to_customer', 'cancelled']),
   delivered_to_driver: new Set(['delivered_to_customer']),
   delivered_to_customer: new Set([]),
   delivered: new Set([]),
@@ -56,21 +108,25 @@ function normalizeStatus(status) {
 }
 
 function canTransition(fromStatus, toStatus) {
+  if (!fromStatus || !toStatus) return false;
   const from = normalizeStatus(fromStatus);
   const to = normalizeStatus(toStatus);
   if (from === to) return false;
-  return ALLOWED_TRANSITIONS[fromStatus]?.has(toStatus)
+
+  return Boolean(
+    ALLOWED_TRANSITIONS[fromStatus]?.has(toStatus)
     || ALLOWED_TRANSITIONS[from]?.has(toStatus)
     || ALLOWED_TRANSITIONS[fromStatus]?.has(to)
-    || false;
+    || ALLOWED_TRANSITIONS[from]?.has(to)
+  );
 }
 
 function isActiveStatus(status) {
-  return ACTIVE_STATUSES.has(status);
+  return ACTIVE_STATUSES.has(status) || ACTIVE_STATUSES.has(normalizeStatus(status));
 }
 
 function isTerminalStatus(status) {
-  return TERMINAL_STATUSES.has(status);
+  return TERMINAL_STATUSES.has(status) || TERMINAL_STATUSES.has(normalizeStatus(status));
 }
 
 const STATUS_LABELS = {

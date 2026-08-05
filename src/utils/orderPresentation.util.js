@@ -125,12 +125,18 @@ async function enrichSingleOrder(order, options = {}) {
 function getStoreStatusLabel(legacyStatus) {
   const labels = {
     pending: 'بانتظار التأكيد',
+    store_accepted: 'تم قبول المتجر',
     ready_for_delivery_pickup: 'جاهز للتسليم — شركة التوصيل',
     ready_for_driver_pickup: 'جاهز لاستلام السائق',
     delivery_handover_complete: 'اكتمل تسليم الطلب للسائق',
+    preparing: 'قيد التحضير',
+    delivered_to_driver: 'تم التسليم للسائق',
     delivered_to_customer: 'تم التسليم للزبون',
+    confirmed: 'مؤكّد',
     rejected: 'مرفوض',
     cancelled: 'ملغى',
+    delivered: 'تم التسليم',
+    completed_off_platform: 'اكتمل خارج المنصة',
   };
   return labels[legacyStatus] || legacyStatus;
 }
