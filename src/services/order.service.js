@@ -788,9 +788,16 @@ async function updateOrderStatus(ownerId, orderId, status, options = {}) {
       setImmediate(() => {
         try {
           const deliverySessionService = require("./deliverySession.service");
-          deliverySessionService.syncOrderInSessions(result.order._id).catch(() => {});
-        } catch (_) {
-          /* non-critical */
+          deliverySessionService.syncOrderInSessions(result.order._id).catch((err) => {
+            const { safeLog } = require("../utils/logSanitize.util");
+            safeLog("error", "delivery_session_sync_failed", {
+              orderId: String(result.order._id),
+              message: err?.message,
+            });
+          });
+        } catch (err) {
+          const { safeLog } = require("../utils/logSanitize.util");
+          safeLog("error", "delivery_session_sync_require_failed", { message: err?.message });
         }
       });
     }
@@ -803,9 +810,16 @@ async function updateOrderStatus(ownerId, orderId, status, options = {}) {
         setImmediate(() => {
           try {
             const deliverySessionService = require("./deliverySession.service");
-            deliverySessionService.syncOrderInSessions(result.order._id).catch(() => {});
-          } catch (_) {
-            /* non-critical */
+            deliverySessionService.syncOrderInSessions(result.order._id).catch((syncErr) => {
+              const { safeLog } = require("../utils/logSanitize.util");
+              safeLog("error", "delivery_session_sync_failed", {
+                orderId: String(result.order._id),
+                message: syncErr?.message,
+              });
+            });
+          } catch (syncErr) {
+            const { safeLog } = require("../utils/logSanitize.util");
+            safeLog("error", "delivery_session_sync_require_failed", { message: syncErr?.message });
           }
         });
       }

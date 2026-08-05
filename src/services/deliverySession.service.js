@@ -145,6 +145,23 @@ function attachCompanyFields(summary, company) {
   return summary;
 }
 
+function stopOrderId(stop) {
+  return String(stop?.order?._id || stop?.order || "");
+}
+
+/** Line items for delivery company/driver — never include prices. */
+function mapDeliveryLineItems(items = []) {
+  return (items || []).map((item) => {
+    const isPricePurchase = item.purchaseMethod === "price";
+    return {
+      name: item.productName || item.name || "",
+      quantity: isPricePurchase ? 1 : (item.quantity || 1),
+      notes: cleanString(item.notes || item.note || "", { field: "itemNotes", max: 500 }),
+      purchaseMethod: item.purchaseMethod || "quantity",
+    };
+  }).filter((item) => item.name);
+}
+
 function formatSessionSummary(session, company = null) {
   const plain = session.toObject ? session.toObject() : { ...session };
   const status = normalizeSessionStatus(plain.status);
@@ -203,21 +220,106 @@ async function refreshStoreStopsFromOrders(session) {
   if (!orderIds.length) return session;
 
   const freshOrders = await Order.find({ _id: { $in: orderIds } })
-    .select("status orderNumber verificationCode deliveryMethod deliveryGroup")
+    .select("status orderNumber verificationCode deliveryMethod deliveryGroup items customerNotes storeNotes deliveryNotes createdAt")
     .lean();
   const orderMap = Object.fromEntries(freshOrders.map((o) => [String(o._id), o]));
 
   session.storeStops = (session.storeStops || []).map((stop) => {
-    const order = orderMap[String(stop.order)] || {};
+    const orderId = stopOrderId(stop);
+    const order = orderMap[orderId] || {};
+    const base = stop.toObject ? stop.toObject() : { ...stop };
+    const notes = [order.customerNotes, order.deliveryNotes, order.storeNotes]
+      .map((n) => String(n || "").trim())
+      .filter(Boolean)
+      .join(" — ");
     return {
-      ...stop,
-      orderStatus: order.status || stop.orderStatus,
-      orderNumber: order.orderNumber || stop.orderNumber,
-      verificationCode: order.verificationCode || stop.verificationCode,
+      ...base,
+      order: stop.order?._id || stop.order,
+      orderStatus: order.status || base.orderStatus,
+      orderNumber: order.orderNumber || base.orderNumber,
+      verificationCode: order.verificationCode || base.verificationCode,
+      customerNotes: notes || base.customerNotes || "",
+      orderCreatedAt: order.createdAt || base.orderCreatedAt || null,
+      items: mapDeliveryLineItems(order.items || []),
     };
   });
 
   return session;
+}
+
+/**
+ * Persist store-stop order statuses from live orders and advance
+ * waiting_for_stores → ready_for_pickup when all stores approved.
+ * Safety net for sessions stuck after a failed/silent sync.
+ */
+async function reconcileSessionFromOrders(sessionId) {
+  const doc = await DeliverySession.findById(sessionId);
+  if (!doc) return null;
+
+  const previousStatus = normalizeSessionStatus(doc.status);
+  if (TERMINAL_SESSION_STATUSES.has(previousStatus)) {
+    return doc;
+  }
+
+  const orderIds = (doc.orders || []).map((o) => o._id || o);
+  if (!orderIds.length) return doc;
+
+  const freshOrders = await Order.find({ _id: { $in: orderIds } })
+    .select("status orderNumber verificationCode")
+    .lean();
+  const orderMap = Object.fromEntries(freshOrders.map((o) => [String(o._id), o]));
+
+  let changed = false;
+  for (const stop of doc.storeStops || []) {
+    const order = orderMap[stopOrderId(stop)];
+    if (!order) continue;
+    if (order.orderNumber && stop.orderNumber !== order.orderNumber) {
+      stop.orderNumber = order.orderNumber;
+      changed = true;
+    }
+    if (order.verificationCode && stop.verificationCode !== order.verificationCode) {
+      stop.verificationCode = order.verificationCode;
+      changed = true;
+    }
+    if (order.status && stop.orderStatus !== order.status) {
+      stop.orderStatus = order.status;
+      changed = true;
+    }
+  }
+
+  const REJECTED_ORDER_STATUSES = new Set(["rejected", "cancelled"]);
+  const hasRejectedStop = (doc.storeStops || []).some((stop) =>
+    REJECTED_ORDER_STATUSES.has(stop.orderStatus)
+  );
+
+  if (hasRejectedStop && previousStatus !== SESSION_STATUSES.CANCELLED) {
+    doc.status = SESSION_STATUSES.CANCELLED;
+    pushTimeline(doc, SESSION_STATUSES.CANCELLED, "رفض أحد المتاجر الطلب — تم إلغاء طلب التوصيل");
+    changed = true;
+  } else if (
+    previousStatus === SESSION_STATUSES.WAITING_FOR_STORES
+    && allStoresApproved(doc.storeStops)
+  ) {
+    doc.status = SESSION_STATUSES.READY_FOR_PICKUP;
+    pushTimeline(doc, SESSION_STATUSES.READY_FOR_PICKUP, "جميع المتاجر وافقت على الطلبات");
+    changed = true;
+  }
+
+  if (!changed) return doc;
+
+  doc.markModified("storeStops");
+  await doc.save();
+
+  const company = await DeliveryCompany.findById(doc.deliveryCompany).select("name phone whatsapp").lean();
+  const formatted = formatSessionDetails(doc, company);
+  if (normalizeSessionStatus(doc.status) !== previousStatus) {
+    setImmediate(() => {
+      deliveryNotificationService.dispatchStatusChange(previousStatus, formatted).catch((err) => {
+        safeLog("error", "delivery_status_notify_failed", { message: err?.message });
+      });
+    });
+  }
+  return doc;
 }
 
 async function getActiveSessionForCustomer(customerId) {
@@ -286,7 +388,14 @@ async function confirmSession(customerId, body = {}) {
 
       const existingOrderIds = new Set((existing.orders || []).map((o) => String(o._id || o)));
       const toAdd = orders.filter((o) => !existingOrderIds.has(String(o._id)));
+
+      const nextAddress = cleanString(body.deliveryAddress, { field: "deliveryAddress", max: 500 });
+      const nextPhone = cleanString(body.contactNumber, { field: "contactNumber", max: 32 });
+      if (nextAddress) existing.deliveryAddress = nextAddress;
+      if (nextPhone) existing.customerPhone = nextPhone;
+
       if (!toAdd.length) {
+        if (nextAddress || nextPhone) await existing.save();
         return formatSessionDetails(existing, company);
       }
 
@@ -362,6 +471,14 @@ async function confirmSession(customerId, body = {}) {
   const paymentStatus = isCash ? PAYMENT_STATUSES.PENDING : (receiptImage ? PAYMENT_STATUSES.PAID : PAYMENT_STATUSES.PENDING);
 
   const initialStatus = deriveInitialSubmittedStatus(newStops);
+  const deliveryAddress = cleanString(body.deliveryAddress, { field: "deliveryAddress", max: 500 })
+    || orders[0]?.deliveryAddress
+    || customer?.address
+    || "";
+  const customerPhone = cleanString(body.contactNumber, { field: "contactNumber", max: 32 })
+    || customer?.phone
+    || orders[0]?.customerPhone
+    || "";
 
   const doc = await DeliverySession.create({
     sessionId,
@@ -371,11 +488,11 @@ async function confirmSession(customerId, body = {}) {
     storeStops: newStops,
     status: initialStatus,
     statusTimeline: [{ status: initialStatus, at: new Date(), note: "تم تأكيد طلب التوصيل" }],
-    deliveryAddress: orders[0]?.deliveryAddress || customer?.address || "",
+    deliveryAddress,
     deliveryArea: cleanString(body.deliveryArea, { field: "deliveryArea", max: 500 }),
     regionId: customer?.preferences?.regionId || null,
     customerName: customer?.name || orders[0]?.customerName || "",
-    customerPhone: customer?.phone || orders[0]?.customerPhone || "",
+    customerPhone,
     customerWhatsapp: customer?.whatsapp || "",
     deliveryFee: feeBreakdown.totalFee,
     feeBreakdown,
@@ -385,10 +502,10 @@ async function confirmSession(customerId, body = {}) {
       status: paymentStatus,
       receiptImage,
       senderName: cleanString(body.transferInformation?.senderName, { field: "senderName", max: 120 }),
-      senderPhone: cleanString(body.transferInformation?.contactNumber, { field: "contactNumber", max: 32 }),
+      senderPhone: cleanString(body.transferInformation?.contactNumber, { field: "contactNumber", max: 32 }) || customerPhone,
       transferDetails: {
         senderName: cleanString(body.transferInformation?.senderName, { field: "senderName", max: 120 }),
-        contactNumber: cleanString(body.transferInformation?.contactNumber, { field: "contactNumber", max: 32 }),
+        contactNumber: cleanString(body.transferInformation?.contactNumber, { field: "contactNumber", max: 32 }) || customerPhone,
         referenceNumber: cleanString(body.transferInformation?.referenceNumber, { field: "referenceNumber", max: 64 }),
         note: cleanString(body.transferInformation?.note, { field: "note", max: 500 }),
       },
@@ -401,7 +518,7 @@ async function confirmSession(customerId, body = {}) {
     paymentNotes: cleanString(body.paymentNotes, { field: "paymentNotes", max: 1000 }),
     transferInformation: {
       senderName: cleanString(body.transferInformation?.senderName, { field: "senderName", max: 120 }),
-      contactNumber: cleanString(body.transferInformation?.contactNumber, { field: "contactNumber", max: 32 }),
+      contactNumber: cleanString(body.transferInformation?.contactNumber, { field: "contactNumber", max: 32 }) || customerPhone,
       referenceNumber: cleanString(body.transferInformation?.referenceNumber, { field: "referenceNumber", max: 64 }),
       note: cleanString(body.transferInformation?.note, { field: "note", max: 500 }),
     },
@@ -436,15 +553,19 @@ async function syncAfterStoreHandover(orderId) {
   const previousStatus = normalizeSessionStatus(doc.status);
   if (TERMINAL_SESSION_STATUSES.has(previousStatus)) return;
 
-  doc.storeStops = (doc.storeStops || []).map((stop) => {
-    if (String(stop.order) !== String(oid)) return stop;
-    return {
-      ...stop,
-      orderStatus: order.status,
-      collectionStatus: "collected",
-      collectedAt: stop.collectedAt || new Date(),
-    };
-  });
+  let changed = false;
+  // Mutate subdocuments in place — spreading Mongoose subdocs drops required fields.
+  for (const stop of doc.storeStops || []) {
+    if (stopOrderId(stop) !== String(oid)) continue;
+    stop.orderStatus = order.status;
+    if (stop.collectionStatus !== "collected") {
+      stop.collectionStatus = "collected";
+      stop.collectedAt = stop.collectedAt || new Date();
+    }
+    changed = true;
+  }
+
+  if (!changed) return;
 
   if (allStopsCollected(doc.storeStops) && previousStatus === SESSION_STATUSES.DRIVER_ASSIGNED) {
     doc.status = SESSION_STATUSES.OUT_FOR_DELIVERY;
@@ -457,7 +578,9 @@ async function syncAfterStoreHandover(orderId) {
   const company = await DeliveryCompany.findById(doc.deliveryCompany).select("name phone whatsapp").lean();
   const formatted = formatSessionDetails(doc, company);
   setImmediate(() => {
-    deliveryNotificationService.dispatchStatusChange(previousStatus, formatted).catch(() => {});
+    deliveryNotificationService.dispatchStatusChange(previousStatus, formatted).catch((err) => {
+      safeLog("error", "delivery_handover_notify_failed", { message: err?.message });
+    });
   });
   return formatted;
 }
@@ -466,33 +589,52 @@ async function syncAfterStoreHandover(orderId) {
 async function syncOrderInSessions(orderId) {
   const oid = requireObjectId(orderId, "orderId");
   const order = await Order.findById(oid).select("status deliveryMethod deliveryGroup").lean();
-  if (!order || order.deliveryMethod !== DELIVERY_METHODS.DELIVERY || !order.deliveryGroup) return;
+  if (!order || order.deliveryMethod !== DELIVERY_METHODS.DELIVERY || !order.deliveryGroup) {
+    safeLog("info", "delivery_sync_skip", {
+      orderId: String(oid),
+      reason: !order
+        ? "missing_order"
+        : order.deliveryMethod !== DELIVERY_METHODS.DELIVERY
+          ? "not_delivery"
+          : "no_delivery_group",
+    });
+    return;
+  }
 
   const doc = await DeliverySession.findById(order.deliveryGroup);
-  if (!doc) return;
+  if (!doc) {
+    safeLog("warn", "delivery_sync_missing_session", {
+      orderId: String(oid),
+      deliveryGroup: String(order.deliveryGroup),
+    });
+    return;
+  }
 
   const previousStatus = normalizeSessionStatus(doc.status);
   if (TERMINAL_SESSION_STATUSES.has(previousStatus)) return;
 
-  let changed = false;
+  let stopChanged = false;
   const REJECTED_ORDER_STATUSES = new Set(["rejected", "cancelled"]);
 
-  doc.storeStops = (doc.storeStops || []).map((stop) => {
-    if (String(stop.order) !== String(oid)) return stop;
-    if (stop.orderStatus === order.status) return stop;
-    changed = true;
-    return { ...stop, orderStatus: order.status };
-  });
-
-  if (!changed) return;
+  // Mutate subdocuments in place — spreading Mongoose subdocs drops required fields
+  // and can cause silent save validation failures (stuck waiting_for_stores).
+  for (const stop of doc.storeStops || []) {
+    if (stopOrderId(stop) !== String(oid)) continue;
+    if (stop.orderStatus === order.status) continue;
+    stop.orderStatus = order.status;
+    stopChanged = true;
+  }
 
   const hasRejectedStop = (doc.storeStops || []).some((stop) =>
     REJECTED_ORDER_STATUSES.has(stop.orderStatus)
   );
 
-  if (hasRejectedStop) {
+  let statusChanged = false;
+  if (hasRejectedStop && previousStatus !== SESSION_STATUSES.CANCELLED) {
     doc.status = SESSION_STATUSES.CANCELLED;
     pushTimeline(doc, SESSION_STATUSES.CANCELLED, "رفض أحد المتاجر الطلب — تم إلغاء طلب التوصيل");
+    statusChanged = true;
+
     doc.markModified("storeStops");
     await doc.save();
 
@@ -504,27 +646,47 @@ async function syncOrderInSessions(orderId) {
     const company = await DeliveryCompany.findById(doc.deliveryCompany).select("name phone whatsapp").lean();
     const formatted = formatSessionDetails(doc, company);
     setImmediate(() => {
-      deliveryNotificationService.dispatchStatusChange(previousStatus, formatted).catch(() => {});
+      deliveryNotificationService.dispatchStatusChange(previousStatus, formatted).catch((err) => {
+        safeLog("error", "delivery_cancel_notify_failed", { message: err?.message });
+      });
     });
-    return;
+    return formatted;
   }
 
+  // Even if this stop was already synced, still advance a stuck waiting_for_stores session.
   if (
-    previousStatus === SESSION_STATUSES.WAITING_FOR_STORES &&
-    allStoresApproved(doc.storeStops)
+    previousStatus === SESSION_STATUSES.WAITING_FOR_STORES
+    && allStoresApproved(doc.storeStops)
   ) {
     doc.status = SESSION_STATUSES.READY_FOR_PICKUP;
     pushTimeline(doc, SESSION_STATUSES.READY_FOR_PICKUP, "جميع المتاجر وافقت على الطلبات");
+    statusChanged = true;
   }
+
+  if (!stopChanged && !statusChanged) return;
 
   doc.markModified("storeStops");
   await doc.save();
 
+  safeLog("info", "delivery_sync_ok", {
+    orderId: String(oid),
+    sessionId: String(doc._id),
+    previousStatus,
+    nextStatus: normalizeSessionStatus(doc.status),
+    stopChanged,
+    statusChanged,
+  });
+
   const company = await DeliveryCompany.findById(doc.deliveryCompany).select("name phone whatsapp").lean();
   const formatted = formatSessionDetails(doc, company);
-  setImmediate(() => {
-    deliveryNotificationService.dispatchStatusChange(previousStatus, formatted).catch(() => {});
-  });
+  if (statusChanged || previousStatus !== normalizeSessionStatus(doc.status)) {
+    setImmediate(() => {
+      deliveryNotificationService.dispatchStatusChange(previousStatus, formatted).catch((err) => {
+        safeLog("error", "delivery_sync_notify_failed", { message: err?.message });
+      });
+    });
+  }
+  return formatted;
 }
 
 async function assertCompanyUser(user) {
@@ -605,12 +767,26 @@ async function listSessionsForCompany(user, { status, history = false } = {}) {
   }
 
   const sessions = await DeliverySession.find(query).sort({ createdAt: -1 }).limit(history ? 100 : 50).lean();
+
+  // Heal stuck waiting_for_stores sessions so list badges match store confirmations.
+  const waitingIds = sessions
+    .filter((s) => normalizeSessionStatus(s.status) === SESSION_STATUSES.WAITING_FOR_STORES)
+    .map((s) => s._id);
+  if (waitingIds.length) {
+    await Promise.all(waitingIds.map((id) => reconcileSessionFromOrders(id).catch(() => null)));
+    const refreshed = await DeliverySession.find(query).sort({ createdAt: -1 }).limit(history ? 100 : 50).lean();
+    return refreshed.map(formatSessionSummary);
+  }
+
   return sessions.map(formatSessionSummary);
 }
 
 async function getSessionForCompany(user, sessionId) {
   const companyId = await assertCompanyUser(user);
   const id = requireObjectId(sessionId, "sessionId");
+  // Reconcile persisted status from live order states (fixes stuck waiting_for_stores).
+  await reconcileSessionFromOrders(id);
+
   const session = await DeliverySession.findOne({ _id: id, deliveryCompany: companyId }).lean();
   if (!session) {
     const err = new Error("طلب التوصيل غير موجود");
@@ -868,6 +1044,7 @@ module.exports = {
   syncAfterStoreHandover,
   cancelSession,
   refreshStoreStopsFromOrders,
+  reconcileSessionFromOrders,
   getDashboardStats,
   listSessionsForCompany,
   getSessionForCompany,

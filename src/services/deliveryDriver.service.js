@@ -197,10 +197,10 @@ async function loadOrdersForSession(session) {
       storeAddress: store.address || "",
       items: (order.items || []).map((item) => ({
         name: item.productName || item.name,
-        quantity: item.quantity,
-        price: item.price,
-        subtotal: item.subtotal,
+        quantity: item.purchaseMethod === "price" ? 1 : (item.quantity || 1),
+        purchaseMethod: item.purchaseMethod || "quantity",
         image: item.productImage || item.image || "",
+        // Prices intentionally omitted for delivery staff
       })),
     };
   });
