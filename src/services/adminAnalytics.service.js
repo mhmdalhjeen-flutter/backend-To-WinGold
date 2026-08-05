@@ -5,7 +5,6 @@ const Product = require("../models/product");
 const Order = require("../models/order");
 const PromoCode = require("../models/promoCode");
 const UserActivity = require("../models/userActivity");
-const WheelWin = require("../models/wheelWin");
 const Region = require("../models/region");
 const { REGION_LABELS } = require("../utils/analyticsPeriod.util");
 
@@ -304,43 +303,8 @@ async function ordersByRegion(start, end) {
   );
 }
 
-async function prizeWinsByRegion(start, end) {
-  const rows = await WheelWin.aggregate([
-    { $match: { wonAt: { $gte: start, $lte: end }, hiddenFromAdmin: { $ne: true } } },
-    {
-      $lookup: {
-        from: "wheelprizes",
-        localField: "prize",
-        foreignField: "_id",
-        as: "prizeDoc",
-      },
-    },
-    { $unwind: { path: "$prizeDoc", preserveNullAndEmptyArrays: true } },
-    { $match: { "prizeDoc.prizeType": "item" } },
-    {
-      $lookup: { from: "users", localField: "user", foreignField: "_id", as: "userDoc" },
-    },
-    { $unwind: { path: "$userDoc", preserveNullAndEmptyArrays: true } },
-    {
-      $group: {
-        _id: "$userDoc.preferences.regionId",
-        prizes: { $sum: 1 },
-      },
-    },
-    { $sort: { prizes: -1 } },
-  ]);
-
-  const regionIds = rows.map((r) => r._id).filter(Boolean);
-  const regionDocs = regionIds.length
-    ? await Region.find({ _id: { $in: regionIds } }).select("name").lean()
-    : [];
-  const nameMap = Object.fromEntries(regionDocs.map((r) => [String(r._id), r.name]));
-
-  return rows.map((r) => ({
-    key: r._id ? String(r._id) : "unknown",
-    label: r._id ? nameMap[String(r._id)] || "منطقة غير محددة" : "غير محدد",
-    prizes: r.prizes,
-  }));
+async function prizeWinsByRegion(_start, _end) {
+  return [];
 }
 
 async function regionUsageScores(start, end) {
@@ -467,30 +431,12 @@ async function buildUserPrizeStatsMap(userIds) {
   if (!userIds.length) return {};
 
   const objIds = userIds.filter(Boolean);
-  const [physicalWheel, compJoined, wheelTotal, drawTotal, honorTotal] = await Promise.all([
-    WheelWin.aggregate([
-      { $match: { user: { $in: objIds } } },
-      {
-        $lookup: {
-          from: "wheelprizes",
-          localField: "prize",
-          foreignField: "_id",
-          as: "p",
-        },
-      },
-      { $unwind: "$p" },
-      { $match: { "p.prizeType": "item" } },
-      { $group: { _id: "$user", count: { $sum: 1 } } },
-    ]),
+  const [compJoined, drawTotal, honorTotal] = await Promise.all([
     require("../models/competition").aggregate([
       { $unwind: "$participants" },
       { $match: { "participants.user": { $in: objIds } } },
       { $group: { _id: { user: "$participants.user", comp: "$_id" } } },
       { $group: { _id: "$_id.user", count: { $sum: 1 } } },
-    ]),
-    WheelWin.aggregate([
-      { $match: { user: { $in: objIds } } },
-      { $group: { _id: "$user", count: { $sum: 1 } } },
     ]),
     require("../models/drawBatch").aggregate([
       { $unwind: "$winners" },
@@ -508,32 +454,18 @@ async function buildUserPrizeStatsMap(userIds) {
     const key = String(id);
     if (!map[key]) {
       map[key] = {
-        physicalWheelPrizes: 0,
         competitionsJoined: 0,
         totalPrizesCount: 0,
-        hasPhysicalWheelPrize: false,
         hasCompetitionHistory: false,
       };
     }
     return map[key];
   };
 
-  physicalWheel.forEach((r) => {
-    const s = ensure(r._id);
-    s.physicalWheelPrizes = r.count;
-    s.hasPhysicalWheelPrize = r.count > 0;
-    s.totalPrizesCount += r.count;
-  });
-
   compJoined.forEach((r) => {
     const s = ensure(r._id);
     s.competitionsJoined = r.count;
     s.hasCompetitionHistory = r.count > 0;
-  });
-
-  wheelTotal.forEach((r) => {
-    const s = ensure(r._id);
-    s.totalPrizesCount += r.count;
   });
 
   drawTotal.forEach((r) => {

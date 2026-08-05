@@ -34,7 +34,6 @@ const isPrimaryWorker = () => {
 const monitorOffers = require("./src/utils/offerMonitor");
 const monitorCompetitions = require("./src/utils/competitionMonitor");
 const monitorBazaar = require("./src/utils/bazaarMonitor");
-const { monitorWheelWins } = require("./src/utils/wheelWinMonitor");
 
 dotenv.config();
 
@@ -156,7 +155,6 @@ app.use("/api/admin", adminLimiter);
     "/api/users",
     "/api/honor",
     "/api/admin/achievements",
-    "/api/admin/wheel/prizes",
     "/api/v1/products",
     "/api/v1/offers",
     "/api/v1/stores",
@@ -165,7 +163,6 @@ app.use("/api/admin", adminLimiter);
     "/api/v1/users",
     "/api/v1/honor",
     "/api/v1/admin/achievements",
-    "/api/v1/admin/wheel/prizes",
     "/api/upload",
 ].forEach((path) => app.use(path, uploadWriteLimiter));
 app.use("/api", apiLimiter);
@@ -278,13 +275,11 @@ const startServer = async () => {
         if (isPrimaryWorker()) {
             monitorOffers();
             monitorBazaar();
-            monitorWheelWins();
             monitorCompetitions();
 
             setInterval(() => {
                 monitorOffers();
                 monitorBazaar();
-                monitorWheelWins();
             }, 24 * 60 * 60 * 1000);
 
             setInterval(() => {

@@ -9,15 +9,6 @@ const DEFAULTS = {
   marketplace_enabled: { enabled: true },
   draws_enabled: { enabled: true },
 
-  wheel_enabled: { enabled: true },
-  wheel_spin_cost: { cost: 5 },
-  wheel_spin_interval_ms: { ms: 3000 },
-  wheel_placements: {
-    header: true,
-    userCenter: true,
-    inventory: true,
-  },
-
   store_owner_cart_enabled: { enabled: true },
   store_owner_competitions_enabled: { enabled: true },
   store_owner_member_prizes_enabled: { enabled: true },
@@ -69,19 +60,6 @@ async function getReferralRewardPoints() {
   return val?.points ?? DEFAULTS.referral_reward_points.points;
 }
 
-async function getWheelSettings() {
-  const map = await loadMap();
-  return {
-    enabled: map.wheel_enabled?.enabled !== false,
-    spinCost: map.wheel_spin_cost?.cost ?? DEFAULTS.wheel_spin_cost.cost,
-    spinIntervalMs: map.wheel_spin_interval_ms?.ms ?? DEFAULTS.wheel_spin_interval_ms.ms,
-    placements: {
-      ...DEFAULTS.wheel_placements,
-      ...map.wheel_placements,
-    },
-  };
-}
-
 async function getStoreOwnerPageSettings() {
   const map = await loadMap();
   return {
@@ -110,7 +88,6 @@ async function isMaintenanceMode() {
 /** إعدادات عامة للواجهات (زبون / عام) */
 async function getPublicSettings() {
   const map = await loadMap();
-  const wheel = await getWheelSettings();
   const { getVerificationPolicy } = require("../utils/verification.util");
 
   return {
@@ -120,14 +97,8 @@ async function getPublicSettings() {
       storeCompetitions: map.store_competitions_enabled?.enabled !== false,
       marketplace: map.marketplace_enabled?.enabled !== false,
       draws: map.draws_enabled?.enabled !== false,
-      wheel: wheel.enabled,
     },
     referralRewardPoints: map.referral_reward_points?.points ?? DEFAULTS.referral_reward_points.points,
-    wheel: {
-      enabled: wheel.enabled,
-      spinCost: wheel.spinCost,
-      placements: wheel.placements,
-    },
     verification: getVerificationPolicy(),
   };
 }
@@ -135,7 +106,6 @@ async function getPublicSettings() {
 /** ملخص للوحة الأدمن */
 async function getAdminSummary() {
   const map = await loadMap();
-  const wheel = await getWheelSettings();
 
   return {
     maintenanceModeEnabled: (await getMaintenanceInfo()).enabled,
@@ -145,10 +115,6 @@ async function getAdminSummary() {
     storeCompetitionsEnabled: map.store_competitions_enabled?.enabled !== false,
     marketplaceEnabled: map.marketplace_enabled?.enabled !== false,
     drawsEnabled: map.draws_enabled?.enabled !== false,
-    wheelEnabled: wheel.enabled,
-    wheelSpinCost: wheel.spinCost,
-    wheelSpinIntervalMs: wheel.spinIntervalMs,
-    wheelPlacements: wheel.placements,
     storeOwnerPages: await getStoreOwnerPageSettings(),
   };
 }
@@ -159,7 +125,6 @@ module.exports = {
   getValue,
   isEnabled,
   getReferralRewardPoints,
-  getWheelSettings,
   getStoreOwnerPageSettings,
   getMaintenanceInfo,
   isMaintenanceMode,

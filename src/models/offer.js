@@ -143,6 +143,13 @@ const offerSchema = new mongoose.Schema({
         default: true,
     },
 
+    /** quantity = by count/weight unit, price = by money amount, both = customer chooses */
+    purchaseMode: {
+        type: String,
+        enum: ["quantity", "price", "both"],
+        default: "quantity",
+    },
+
     createdBy: {
         type: mongoose.Schema.Types.ObjectId,
         ref: "User",

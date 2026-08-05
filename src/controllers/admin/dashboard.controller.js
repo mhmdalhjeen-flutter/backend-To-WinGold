@@ -5,7 +5,6 @@ const Offer = require("../../models/offer");
 const Competition = require("../../models/competition");
 const PromoCode = require("../../models/promoCode");
 const ActivationCode = require("../../models/ActivationCode");
-const WheelPrize = require("../../models/wheelPrize");
 const DailyPrize = require("../../models/dailyPrize");
 const ActivityLog = require("../../models/ActivityLog");
 
@@ -74,7 +73,6 @@ async function getCards() {
     products,
     offers,
     competitions,
-    wheelPrizes,
     dailyPrizes,
     promoCodes,
     activationCodes,
@@ -89,7 +87,6 @@ async function getCards() {
     Product.countDocuments(),
     Offer.countDocuments(),
     Competition.countDocuments(),
-    WheelPrize.countDocuments(),
     DailyPrize.countDocuments(),
     PromoCode.countDocuments(),
     ActivationCode.countDocuments(),
@@ -109,8 +106,8 @@ async function getCards() {
     products,
     offers,
     competitions,
-    prizes: wheelPrizes + dailyPrizes,
-    wheelPrizes,
+    prizes: dailyPrizes,
+    wheelPrizes: 0,
     dailyPrizes,
     codes: promoCodes + activationCodes,
     promoCodes,

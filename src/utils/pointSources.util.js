@@ -67,40 +67,11 @@ function mapNotificationToPointSource(notification) {
   };
 }
 
-function mapWheelWinToPointSource(win) {
-  if (!win?._id) return null;
-
-  const prize = win.prize;
-  let points = 0;
-
-  if (prize?.prizeType === "points") {
-    points = Number(prize.prizeValue) || parsePointsFromText(win.prizeName);
-  } else {
-    points = parsePointsFromText(win.prizeName);
-    if (!points) return null;
-    if (prize?.prizeType && prize.prizeType !== "points") return null;
-  }
-
-  if (!points || points <= 0) return null;
-
-  return {
-    id: `wheel-${win._id}`,
-    label: "عجلة الحظ",
-    points,
-    date: win.wonAt || win.createdAt,
-  };
-}
-
-function mergeRecentPointSources(notifications = [], wheelWins = [], limit = 5) {
+function mergeRecentPointSources(notifications = [], limit = 5) {
   const items = [];
 
   for (const notification of notifications) {
     const mapped = mapNotificationToPointSource(notification);
-    if (mapped) items.push(mapped);
-  }
-
-  for (const win of wheelWins) {
-    const mapped = mapWheelWinToPointSource(win);
     if (mapped) items.push(mapped);
   }
 

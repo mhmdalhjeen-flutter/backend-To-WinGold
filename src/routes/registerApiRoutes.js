@@ -25,8 +25,6 @@ const regionRoutes = require("./region.routes");
 const notificationRoutes = require("./notification.routes");
 const settingsRoutes = require("./settings.routes");
 const activityRoutes = require("./activity.routes");
-const wheelRoutes = require("./wheel.routes");
-const wheelAdminRoutes = require("./wheel-admin.routes");
 const ratingRoutes = require("./rating.routes");
 const bazaarRoutes = require("./bazaar.routes");
 const achievementRoutes = require("./achievement.routes");
@@ -70,8 +68,6 @@ function createApiRouter() {
   router.use("/notifications", notificationRoutes);
   router.use("/settings", settingsRoutes);
   router.use("/activity", activityRoutes);
-  router.use("/wheel", wheelRoutes);
-  router.use("/admin", wheelAdminRoutes);
   router.use("/ratings", ratingRoutes);
   router.use("/bazaar", bazaarRoutes);
   router.use("/achievements", achievementRoutes);

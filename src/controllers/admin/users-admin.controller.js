@@ -7,7 +7,6 @@ const BazaarListing = require("../../models/bazaarListing");
 const UserActivity = require("../../models/userActivity");
 const Competition = require("../../models/competition");
 const DrawBatch = require("../../models/drawBatch");
-const WheelWin = require("../../models/wheelWin");
 const HonorBoard = require("../../models/honorBoard");
 const { buildUserPrizeStatsMap } = require("../../services/adminAnalytics.service");
 const { cleanString, numberInRange, requireObjectId, safeRegex } = require("../../utils/inputSecurity.util");
@@ -72,13 +71,12 @@ async function buildParticipationMap() {
 }
 
 async function buildPrizeWinnerSet() {
-  const [drawUsers, wheelUsers, honorUsers] = await Promise.all([
+  const [drawUsers, honorUsers] = await Promise.all([
     DrawBatch.distinct("winners.user"),
-    WheelWin.distinct("user"),
     HonorBoard.distinct("user"),
   ]);
   return new Set(
-    [...drawUsers, ...wheelUsers, ...honorUsers].filter(Boolean).map(String)
+    [...drawUsers, ...honorUsers].filter(Boolean).map(String)
   );
 }
 
@@ -155,8 +153,6 @@ function enrichUser(user, ctx) {
     hasWonPrize: ctx.prizeWinners ? ctx.prizeWinners.has(id) : false,
     hasStoreMembership: ctx.storeMembers ? ctx.storeMembers.has(id) : false,
     usesMarketplace: ctx.marketplaceUsers ? ctx.marketplaceUsers.has(id) : false,
-    hasPhysicalWheelPrize: prizeStats.hasPhysicalWheelPrize || false,
-    physicalWheelPrizes: prizeStats.physicalWheelPrizes || 0,
     competitionsJoined: prizeStats.competitionsJoined || participationsCount,
     hasCompetitionHistory: prizeStats.hasCompetitionHistory || participationsCount > 0,
     totalPrizesCount: prizeStats.totalPrizesCount || 0,
@@ -439,8 +435,6 @@ exports.listUsers = async (req, res) => {
 
     paged.forEach((u) => {
       const stats = prizeStatsMap[String(u._id)] || {};
-      u.hasPhysicalWheelPrize = stats.hasPhysicalWheelPrize || false;
-      u.physicalWheelPrizes = stats.physicalWheelPrizes || 0;
       u.competitionsJoined = stats.competitionsJoined ?? u.participationsCount ?? 0;
       u.hasCompetitionHistory = stats.hasCompetitionHistory || u.competitionsJoined > 0;
       u.totalPrizesCount = stats.totalPrizesCount || 0;
@@ -483,7 +477,6 @@ exports.getUserDetail = async (req, res) => {
       memberships,
       bazaarCount,
       recentActivity,
-      wheelWins,
       honorEntries,
       drawWins,
     ] = await Promise.all([
@@ -495,7 +488,6 @@ exports.getUserDetail = async (req, res) => {
         .lean(),
       BazaarListing.countDocuments({ seller: id }),
       UserActivity.find({ user: id }).sort({ createdAt: -1 }).limit(15).lean(),
-      WheelWin.find({ user: id }).sort({ wonAt: -1 }).limit(5).select("prizeName wonAt deliveryStatus").lean(),
       HonorBoard.find({ user: id }).sort({ createdAt: -1 }).limit(5).select("title prizeName receivedAt").lean(),
       DrawBatch.find({ "winners.user": id })
         .select("name winners eventDate")
@@ -528,8 +520,6 @@ exports.getUserDetail = async (req, res) => {
         hasWonPrize: prizeWinners.has(String(id)),
         bazaarListingsCount: bazaarCount,
         usesMarketplace: bazaarCount > 0,
-        hasPhysicalWheelPrize: prizeStats.hasPhysicalWheelPrize || false,
-        physicalWheelPrizes: prizeStats.physicalWheelPrizes || 0,
         competitionsJoined: prizeStats.competitionsJoined || participationsMap[String(id)] || 0,
         hasCompetitionHistory: prizeStats.hasCompetitionHistory || false,
         totalPrizesCount: prizeStats.totalPrizesCount || 0,
@@ -537,7 +527,6 @@ exports.getUserDetail = async (req, res) => {
       storeMemberships: memberships,
       recentActivity,
       prizes: {
-        wheel: wheelWins,
         honor: honorEntries,
         draws: drawPrizes,
       },

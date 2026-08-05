@@ -5,6 +5,7 @@ const Store = require("../models/store");
 const User = require("../models/user");
 const notificationService = require("./notification.service");
 const storeCardInventoryService = require("./storeCardInventory.service");
+const membershipService = require("./storeMembership.service");
 const { restoreStockForOrderItems, restoreItemsToStoreContainer } = require("./cart.service");
 const { cleanString } = require("../utils/inputSecurity.util");
 const { DELIVERY_METHODS } = require("../constants/marketplaceOrder.constants");
@@ -434,6 +435,11 @@ async function updateOrderStatusCore(ownerId, orderId, status, session, options 
 
     if (rewardPointsAwarded > 0) {
       await notifyOrderPointGift(order, store, rewardPointsAwarded);
+      try {
+        await membershipService.upgradeToMember(order.customer, store._id);
+      } catch (_) {
+        /* non-critical — membership upgrade should not block order confirm */
+      }
     }
 
     const confirmTitle = isDeliveryOrder ? "تم قبول طلبك" : "تم تأكيد طلبك من المتجر";

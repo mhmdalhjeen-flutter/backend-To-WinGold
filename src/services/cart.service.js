@@ -210,6 +210,35 @@ async function resolveProductCartLine(productId, body) {
   };
 }
 
+async function resolveOfferCartLine(offerId, body) {
+  const offer = await Offer.findById(offerId)
+    .select("purchaseMode title isActive")
+    .lean();
+  if (!offer) {
+    const err = new Error("العرض غير موجود");
+    err.status = 404;
+    throw err;
+  }
+
+  const purchaseMethod = assertPurchaseMethodAllowed(
+    offer.purchaseMode,
+    body.purchaseMethod || "quantity"
+  );
+
+  if (purchaseMethod === "price") {
+    return {
+      purchaseMethod: "price",
+      quantity: 1,
+      requestedAmount: parseRequestedAmount(body.requestedAmount),
+    };
+  }
+
+  return {
+    purchaseMethod: "quantity",
+    quantity: parsePositiveQuantity(body.quantity ?? 1),
+  };
+}
+
 function findUnlockedContainer(cart, storeId) {
   return (cart.containers || []).find(
     (c) => !c.locked && c.store.toString() === storeId.toString()
@@ -387,7 +416,7 @@ async function populateCartItems(items) {
     offerIds.length
       ? Offer.find({ _id: { $in: offerIds } })
           .select(
-            "title finalPrice price image images description isActive store value offerType originalPrice currency"
+            "title finalPrice price image images description isActive store value offerType originalPrice currency purchaseMode"
           )
           .lean()
       : [],
@@ -837,7 +866,6 @@ async function addToCart(user, body) {
   assertNoMongoOperators(body, "cart");
   const itemId = requireObjectId(body.itemId, "itemId");
   const itemType = cleanString(body.itemType, { field: "itemType", max: 20, required: true });
-  const quantity = body.quantity ?? 1;
 
   const normalizedType = normalizeItemType(itemType);
   if (!normalizedType) {
@@ -879,10 +907,7 @@ async function addToCart(user, body) {
   const line =
     normalizedType === "Product"
       ? await resolveProductCartLine(itemId, body)
-      : {
-          purchaseMethod: "quantity",
-          quantity: parsePositiveQuantity(quantity),
-        };
+      : await resolveOfferCartLine(itemId, body);
 
   const purchaseMethod = line.purchaseMethod || "quantity";
   const existing = container.items.find((i) =>
