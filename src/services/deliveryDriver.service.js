@@ -273,19 +273,26 @@ function formatDriverAssignment(session, company, orders = []) {
   };
 }
 
+async function resolveAssignmentDriverIds(driver) {
+  const companyDrivers = await DeliveryCompanyDriver.find({
+    deliveryCompany: driver.deliveryCompany,
+  })
+    .select("_id phone")
+    .lean();
+
+  const myPhone = normalizeLocalPhone(driver.phone);
+  const siblingIds = companyDrivers
+    .filter((d) => normalizeLocalPhone(d.phone) === myPhone)
+    .map((d) => d._id);
+
+  return siblingIds.length ? siblingIds : [driver._id];
+}
+
 async function listActiveAssignments(user) {
   const driver = await resolveDriverFromUser(user);
   // Include sibling contact rows with the same phone (company-created then
   // self-registered) so assignments saved against either _id are visible.
-  const siblingIds = await DeliveryCompanyDriver.find({
-    deliveryCompany: driver.deliveryCompany,
-    phone: driver.phone,
-  })
-    .select("_id")
-    .lean();
-  const driverIds = siblingIds.length
-    ? siblingIds.map((d) => d._id)
-    : [driver._id];
+  const driverIds = await resolveAssignmentDriverIds(driver);
 
   const sessions = await DeliverySession.find({
     deliveryCompany: driver.deliveryCompany,
@@ -308,15 +315,7 @@ async function listActiveAssignments(user) {
 
 async function listDeliveryHistory(user, { limit = 50 } = {}) {
   const driver = await resolveDriverFromUser(user);
-  const siblingIds = await DeliveryCompanyDriver.find({
-    deliveryCompany: driver.deliveryCompany,
-    phone: driver.phone,
-  })
-    .select("_id")
-    .lean();
-  const driverIds = siblingIds.length
-    ? siblingIds.map((d) => d._id)
-    : [driver._id];
+  const driverIds = await resolveAssignmentDriverIds(driver);
 
   const sessions = await DeliverySession.find({
     deliveryCompany: driver.deliveryCompany,
@@ -335,15 +334,7 @@ async function listDeliveryHistory(user, { limit = 50 } = {}) {
 async function getAssignmentDetail(user, sessionId) {
   const driver = await resolveDriverFromUser(user);
   const id = requireObjectId(sessionId, "sessionId");
-  const siblingIds = await DeliveryCompanyDriver.find({
-    deliveryCompany: driver.deliveryCompany,
-    phone: driver.phone,
-  })
-    .select("_id")
-    .lean();
-  const driverIds = siblingIds.length
-    ? siblingIds.map((d) => d._id)
-    : [driver._id];
+  const driverIds = await resolveAssignmentDriverIds(driver);
 
   const session = await DeliverySession.findOne({
     _id: id,
@@ -367,15 +358,7 @@ async function completeDelivery(user, sessionId, body = {}) {
   const driver = await resolveDriverFromUser(user);
   const id = requireObjectId(sessionId, "sessionId");
   const clientSyncId = cleanString(body.clientSyncId, { field: "clientSyncId", max: 120 }) || "";
-  const siblingIds = await DeliveryCompanyDriver.find({
-    deliveryCompany: driver.deliveryCompany,
-    phone: driver.phone,
-  })
-    .select("_id")
-    .lean();
-  const driverIds = siblingIds.length
-    ? siblingIds.map((d) => d._id)
-    : [driver._id];
+  const driverIds = await resolveAssignmentDriverIds(driver);
 
   const session = await DeliverySession.findOne({
     _id: id,

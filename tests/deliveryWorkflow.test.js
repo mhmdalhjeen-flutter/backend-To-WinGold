@@ -157,20 +157,24 @@ test("Step 4: out_for_delivery status set recognized", () => {
   assert.ok(OUT_FOR_DELIVERY_STATUSES.has(SESSION_STATUSES.OUT_FOR_DELIVERY));
 });
 
-test("Step 4: customer message on the way with driver info", () => {
+test("Step 4: customer message on the way even if session still driver_assigned", () => {
   const msg = getCustomerDeliveryStatusMessage(
     { deliveryMethod: "delivery", legacyStatus: "delivery_handover_complete", status: "delivery_handover_complete" },
     {
-      status: SESSION_STATUSES.OUT_FOR_DELIVERY,
+      status: SESSION_STATUSES.DRIVER_ASSIGNED,
       assignedDriver: { name: "Ali", phone: "0599" },
       companyName: "FastCo",
       companyPhone: "0222",
     }
   );
   assert.ok(msg);
-  assert.ok(msg.title.includes("طريق") || msg.body.includes("توصيل"));
+  assert.strictEqual(msg.title, "الطلب في الطريق");
   assert.strictEqual(msg.driverName, "Ali");
-  assert.strictEqual(msg.driverPhone, "0599");
+  assert.strictEqual(msg.companyName, "FastCo");
+});
+
+test("Step 4: customer label for out_for_delivery", () => {
+  assert.strictEqual(getCustomerStatusLabel(SESSION_STATUSES.OUT_FOR_DELIVERY), "الطلب في الطريق");
 });
 
 test("Step 4: timeline current step on_the_way after handover", () => {

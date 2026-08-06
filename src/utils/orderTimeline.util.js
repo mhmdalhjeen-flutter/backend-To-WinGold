@@ -162,26 +162,26 @@ function getCustomerDeliveryStatusMessage(order, delivery) {
     companyWhatsapp: delivery?.companyWhatsapp || delivery?.companyPhone || '',
   };
 
-  if (sessionStatus === SESSION_STATUSES.DRIVER_ASSIGNED || legacyStatus === 'ready_for_driver_pickup') {
-    return {
-      title: 'تم تعيين سائق وسيتوجه إلى المتجر قريباً',
-      body: carrier.driverName
-        ? `السائق ${carrier.driverName} متوجه إلى المتجر لاستلام طلبك`
-        : 'تم تعيين سائق وسيتوجه إلى المتجر قريباً',
-      ...carrier,
-    };
-  }
-
   if (
     sessionStatus === SESSION_STATUSES.OUT_FOR_DELIVERY
     || legacyStatus === 'delivery_handover_complete'
     || legacyStatus === 'delivered_to_driver'
   ) {
     return {
-      title: 'طلبك في الطريق',
+      title: 'الطلب في الطريق',
       body: carrier.driverName
         ? `${carrier.driverName} يقوم بتوصيل طلبك الآن`
-        : 'طلبك في الطريق إليك',
+        : 'الطلب في الطريق إليك',
+      ...carrier,
+    };
+  }
+
+  if (sessionStatus === SESSION_STATUSES.DRIVER_ASSIGNED || legacyStatus === 'ready_for_driver_pickup') {
+    return {
+      title: 'تم تعيين سائق وسيتوجه إلى المتجر قريباً',
+      body: carrier.driverName
+        ? `السائق ${carrier.driverName} متوجه إلى المتجر لاستلام طلبك`
+        : 'تم تعيين سائق وسيتوجه إلى المتجر قريباً',
       ...carrier,
     };
   }

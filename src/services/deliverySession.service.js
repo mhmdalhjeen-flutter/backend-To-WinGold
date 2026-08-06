@@ -547,29 +547,83 @@ async function syncAfterStoreHandover(orderId) {
   const order = await Order.findById(oid).select("status deliveryMethod deliveryGroup store").lean();
   if (!order || order.deliveryMethod !== DELIVERY_METHODS.DELIVERY || !order.deliveryGroup) return;
 
+  const HANDOVER_ORDER_STATUSES = new Set(["delivery_handover_complete", "delivered_to_driver"]);
+  if (!HANDOVER_ORDER_STATUSES.has(order.status)) return;
+
   const doc = await DeliverySession.findById(order.deliveryGroup);
   if (!doc) return;
 
   const previousStatus = normalizeSessionStatus(doc.status);
   if (TERMINAL_SESSION_STATUSES.has(previousStatus)) return;
+  if (OUT_FOR_DELIVERY_STATUSES.has(previousStatus) || previousStatus === SESSION_STATUSES.OUT_FOR_DELIVERY) {
+    // Already out for delivery — still refresh stop collection flags if needed.
+  }
 
-  let changed = false;
+  let matchedStop = false;
   // Mutate subdocuments in place — spreading Mongoose subdocs drops required fields.
   for (const stop of doc.storeStops || []) {
     if (stopOrderId(stop) !== String(oid)) continue;
+    matchedStop = true;
     stop.orderStatus = order.status;
     if (stop.collectionStatus !== "collected") {
       stop.collectionStatus = "collected";
       stop.collectedAt = stop.collectedAt || new Date();
     }
-    changed = true;
   }
 
-  if (!changed) return;
+  // Heal mismatched / empty stops from live order statuses so handoff still advances.
+  if (!matchedStop || !(doc.storeStops || []).length) {
+    safeLog("warn", "delivery_handover_stop_mismatch", {
+      orderId: String(oid),
+      sessionId: String(doc._id),
+      stopCount: (doc.storeStops || []).length,
+      matchedStop,
+    });
+    const orderIds = (doc.orders || []).map((o) => o._id || o);
+    if (orderIds.length) {
+      const liveOrders = await Order.find({ _id: { $in: orderIds } }).select("status").lean();
+      const statusById = Object.fromEntries(liveOrders.map((o) => [String(o._id), o.status]));
+      for (const stop of doc.storeStops || []) {
+        const sid = stopOrderId(stop);
+        const liveStatus = statusById[sid];
+        if (!liveStatus) continue;
+        stop.orderStatus = liveStatus;
+        if (HANDOVER_ORDER_STATUSES.has(liveStatus) || liveStatus === "delivered_to_customer") {
+          stop.collectionStatus = "collected";
+          stop.collectedAt = stop.collectedAt || new Date();
+        }
+      }
+    }
+  }
 
-  if (allStopsCollected(doc.storeStops) && previousStatus === SESSION_STATUSES.DRIVER_ASSIGNED) {
+  const canAdvanceFrom = new Set([
+    SESSION_STATUSES.DRIVER_ASSIGNED,
+    SESSION_STATUSES.ACCEPTED,
+  ]);
+
+  let allCollected = allStopsCollected(doc.storeStops);
+  if (!allCollected && (!(doc.storeStops || []).length || !matchedStop)) {
+    const orderIds = (doc.orders || []).map((o) => o._id || o);
+    if (orderIds.length) {
+      const liveOrders = await Order.find({ _id: { $in: orderIds } }).select("status").lean();
+      allCollected = liveOrders.length > 0 && liveOrders.every((o) =>
+        HANDOVER_ORDER_STATUSES.has(o.status)
+        || o.status === "delivered_to_customer"
+        || o.status === "delivered"
+      );
+    }
+  }
+
+  let statusAdvanced = false;
+  if (
+    allCollected
+    && canAdvanceFrom.has(previousStatus)
+    && previousStatus !== SESSION_STATUSES.OUT_FOR_DELIVERY
+    && !OUT_FOR_DELIVERY_STATUSES.has(previousStatus)
+  ) {
     doc.status = SESSION_STATUSES.OUT_FOR_DELIVERY;
     pushTimeline(doc, SESSION_STATUSES.OUT_FOR_DELIVERY, "استلم السائق الطلب من المتجر");
+    statusAdvanced = true;
   }
 
   doc.markModified("storeStops");
@@ -577,11 +631,24 @@ async function syncAfterStoreHandover(orderId) {
 
   const company = await DeliveryCompany.findById(doc.deliveryCompany).select("name phone whatsapp").lean();
   const formatted = formatSessionDetails(doc, company);
-  setImmediate(() => {
-    deliveryNotificationService.dispatchStatusChange(previousStatus, formatted).catch((err) => {
-      safeLog("error", "delivery_handover_notify_failed", { message: err?.message });
+
+  if (statusAdvanced || normalizeSessionStatus(doc.status) !== previousStatus) {
+    setImmediate(() => {
+      deliveryNotificationService.dispatchStatusChange(previousStatus, formatted).catch((err) => {
+        safeLog("error", "delivery_handover_notify_failed", { message: err?.message });
+      });
     });
-  });
+  } else if (matchedStop && HANDOVER_ORDER_STATUSES.has(order.status)) {
+    // Single-store handoff should have advanced; log if still stuck for ops.
+    safeLog("warn", "delivery_handover_status_stuck", {
+      orderId: String(oid),
+      sessionId: String(doc._id),
+      previousStatus,
+      allCollected,
+      hasDriver: Boolean(doc.assignedDriver?.driverId),
+    });
+  }
+
   return formatted;
 }
 
@@ -664,6 +731,23 @@ async function syncOrderInSessions(orderId) {
   }
 
   if (!stopChanged && !statusChanged) return;
+
+  // Avoid clobbering a concurrent handoff that already advanced session status.
+  const latest = await DeliverySession.findById(doc._id).select("status").lean();
+  const latestStatus = normalizeSessionStatus(latest?.status);
+  if (latest && latestStatus !== previousStatus) {
+    await DeliverySession.updateOne(
+      { _id: doc._id, "storeStops.order": oid },
+      { $set: { "storeStops.$.orderStatus": order.status } },
+    );
+    safeLog("info", "delivery_sync_skip_stale_status", {
+      orderId: String(oid),
+      sessionId: String(doc._id),
+      previousStatus,
+      latestStatus,
+    });
+    return;
+  }
 
   doc.markModified("storeStops");
   await doc.save();

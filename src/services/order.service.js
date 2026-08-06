@@ -555,18 +555,9 @@ async function updateOrderStatusCore(ownerId, orderId, status, session, options 
       throw err;
     }
 
-    setImmediate(() => {
-      try {
-        const deliverySessionService = require("./deliverySession.service");
-        deliverySessionService.syncAfterStoreHandover(order._id).catch(() => {});
-      } catch (_) {
-        /* non-critical */
-      }
-    });
-
-    // Customer / company / driver notifications are sent by
-    // deliverySession.syncAfterStoreHandover → dispatchStatusChange
-    // when the session advances to out_for_delivery.
+    // Session advance + notifications: updateOrderStatus → syncDeliverySessionAfterOrderUpdate
+    // (syncAfterStoreHandover). Do not also fire syncOrderInSessions — it races and can
+    // overwrite out_for_delivery back to driver_assigned.
 
     return {
       message: "تم تسليم الطلب للسائق — اكتملت مسؤولية المتجر",
@@ -592,17 +583,6 @@ async function updateOrderStatusCore(ownerId, orderId, status, session, options 
       const err = new Error("تم تحديث الطلب بالفعل");
       err.status = 409;
       throw err;
-    }
-
-    if (order.deliveryGroup) {
-      setImmediate(() => {
-        try {
-          const deliverySessionService = require("./deliverySession.service");
-          deliverySessionService.syncAfterStoreHandover(order._id).catch(() => {});
-        } catch (_) {
-          /* non-critical */
-        }
-      });
     }
 
     return { message: "تم تسليم الطلب للسائق", order, cards: store.cards, bypassCards: store.bypassCards };
@@ -801,6 +781,30 @@ async function updateOrderStatusCore(ownerId, orderId, status, session, options 
   throw err;
 }
 
+/** Sync delivery session after order status commit — routes handoff vs generic sync. */
+async function syncDeliverySessionAfterOrderUpdate(order) {
+  if (!order?._id) return;
+  const deliverySessionService = require("./deliverySession.service");
+  const status = order.status;
+  const isHandover =
+    status === "delivery_handover_complete" || status === "delivered_to_driver";
+
+  try {
+    if (isHandover) {
+      await deliverySessionService.syncAfterStoreHandover(order._id);
+    } else {
+      await deliverySessionService.syncOrderInSessions(order._id);
+    }
+  } catch (err) {
+    const { safeLog } = require("../utils/logSanitize.util");
+    safeLog("error", isHandover ? "delivery_handover_sync_failed" : "delivery_session_sync_failed", {
+      orderId: String(order._id),
+      status,
+      message: err?.message,
+    });
+  }
+}
+
 async function updateOrderStatus(ownerId, orderId, status, options = {}) {
   const session = await mongoose.startSession();
   try {
@@ -808,21 +812,7 @@ async function updateOrderStatus(ownerId, orderId, status, options = {}) {
     const result = await updateOrderStatusCore(ownerId, orderId, status, session, options);
     await session.commitTransaction();
     if (result?.order?._id) {
-      setImmediate(() => {
-        try {
-          const deliverySessionService = require("./deliverySession.service");
-          deliverySessionService.syncOrderInSessions(result.order._id).catch((err) => {
-            const { safeLog } = require("../utils/logSanitize.util");
-            safeLog("error", "delivery_session_sync_failed", {
-              orderId: String(result.order._id),
-              message: err?.message,
-            });
-          });
-        } catch (err) {
-          const { safeLog } = require("../utils/logSanitize.util");
-          safeLog("error", "delivery_session_sync_require_failed", { message: err?.message });
-        }
-      });
+      await syncDeliverySessionAfterOrderUpdate(result.order);
     }
     return result;
   } catch (err) {
@@ -830,21 +820,7 @@ async function updateOrderStatus(ownerId, orderId, status, options = {}) {
     if (isTransactionUnsupported(err)) {
       const result = await updateOrderStatusCore(ownerId, orderId, status, null, options);
       if (result?.order?._id) {
-        setImmediate(() => {
-          try {
-            const deliverySessionService = require("./deliverySession.service");
-            deliverySessionService.syncOrderInSessions(result.order._id).catch((syncErr) => {
-              const { safeLog } = require("../utils/logSanitize.util");
-              safeLog("error", "delivery_session_sync_failed", {
-                orderId: String(result.order._id),
-                message: syncErr?.message,
-              });
-            });
-          } catch (syncErr) {
-            const { safeLog } = require("../utils/logSanitize.util");
-            safeLog("error", "delivery_session_sync_require_failed", { message: syncErr?.message });
-          }
-        });
+        await syncDeliverySessionAfterOrderUpdate(result.order);
       }
       return result;
     }
@@ -1023,16 +999,7 @@ async function handOrderToDriver(ownerId, orderId) {
     throw err;
   }
 
-  setImmediate(() => {
-    try {
-      const deliverySessionService = require("./deliverySession.service");
-      deliverySessionService.syncAfterStoreHandover(order._id).catch(() => {});
-    } catch (_) {
-      /* non-critical */
-    }
-  });
-
-  // Notifications: syncAfterStoreHandover → dispatchStatusChange (out_for_delivery)
+  await syncDeliverySessionAfterOrderUpdate(order);
 
   return {
     message: "تم تسليم الطلب للسائق — اكتملت مسؤولية المتجر",

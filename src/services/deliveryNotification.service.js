@@ -213,7 +213,7 @@ async function onOutForDelivery(session, extra = {}) {
 
   await notifyCustomer(session.customer, {
     type: "delivery_on_the_way",
-    title: "طلبك في الطريق",
+    title: "الطلب في الطريق",
     body,
     session: enrichedSession,
   });

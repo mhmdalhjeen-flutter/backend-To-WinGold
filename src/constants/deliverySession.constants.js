@@ -41,7 +41,7 @@ const CUSTOMER_STATUS_LABELS = {
   [SESSION_STATUSES.READY_FOR_PICKUP]: "تم قبول الطلب — بانتظار شركة التوصيل",
   [SESSION_STATUSES.DRIVER_ASSIGNED]: "تم تعيين سائق وسيتوجه إلى المتجر قريباً",
   [SESSION_STATUSES.ACCEPTED]: "مقبول",
-  [SESSION_STATUSES.OUT_FOR_DELIVERY]: "طلبك في الطريق",
+  [SESSION_STATUSES.OUT_FOR_DELIVERY]: "الطلب في الطريق",
   [SESSION_STATUSES.COMPLETED]: "تم استلام الطلب بنجاح",
   [SESSION_STATUSES.REJECTED]: "مرفوض",
   [SESSION_STATUSES.CANCELLED]: "ملغى",
