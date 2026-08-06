@@ -4,9 +4,9 @@ const orderService = require("./order.service");
 const deliverySessionService = require("./deliverySession.service");
 const {
   formatOrderResponse,
-  formatOrderList,
   enrichOrdersWithDeliverySession,
   enrichSingleOrder,
+  getStoreStatusLabel,
 } = require("../utils/orderPresentation.util");
 const {
   ORDER_STATUSES,
@@ -84,9 +84,22 @@ async function getCustomerOrderDetail(user, orderId) {
 
 async function getStoreOrders(ownerId) {
   const data = await orderService.getStoreOrders(ownerId);
+  const enriched = await enrichOrdersWithDeliverySession(data.orders);
+
   return {
     ...data,
-    orders: formatOrderList(data.orders),
+    orders: enriched.map((order) => {
+      const hasDriver = Boolean(
+        order.deliverySession?.assignedDriver?.driverId
+        || order.deliverySession?.assignedDriver?.name
+        || order.deliveryDriverName
+      );
+      return {
+        ...order,
+        canHandToDriver: order.legacyStatus === "ready_for_driver_pickup" && hasDriver,
+        storeStatusLabel: getStoreStatusLabel(order.legacyStatus),
+      };
+    }),
   };
 }
 

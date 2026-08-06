@@ -639,6 +639,23 @@ async function updateOrderStatusCore(ownerId, orderId, status, session, options 
       err.status = 400;
       throw err;
     }
+
+    try {
+      await notificationService.create({
+        user: order.customer,
+        type: "order_delivered",
+        title: "تم استلام طلبك",
+        body: `قام ${store.name || "المتجر"} بتسليم طلبك رقم ${order.orderNumber || ""}`.trim(),
+        data: {
+          orderId: order._id.toString(),
+          storeId: store._id.toString(),
+          deliveryMethod: order.deliveryMethod || "",
+        },
+      });
+    } catch (_) {
+      /* non-critical */
+    }
+
     return {
       message: "تم تسليم الطلب للزبون",
       order,
