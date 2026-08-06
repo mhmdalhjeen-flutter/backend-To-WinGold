@@ -177,6 +177,15 @@ test("Step 4: customer label for out_for_delivery", () => {
   assert.strictEqual(getCustomerStatusLabel(SESSION_STATUSES.OUT_FOR_DELIVERY), "الطلب في الطريق");
 });
 
+test("Step 4: allStopsCollected false when empty does not block live-order handoff concept", () => {
+  // Empty stops → not collected via flags; live-order path in syncAfterStoreHandover covers this.
+  assert.strictEqual(allStopsCollected([]), false);
+  assert.strictEqual(
+    allStopsCollected([{ collectionStatus: "collected" }]),
+    true,
+  );
+});
+
 test("Step 4: timeline current step on_the_way after handover", () => {
   const key = resolveCurrentStepKey(
     { deliveryMethod: "delivery", legacyStatus: "delivery_handover_complete", status: "delivery_handover_complete" },

@@ -232,16 +232,36 @@ async function loadOrdersForSession(session) {
   });
 }
 
+const HANDOVER_COMPLETE_ORDER_STATUSES = new Set([
+  "delivery_handover_complete",
+  "delivered_to_driver",
+  "delivered_to_customer",
+  "delivered",
+]);
+
 function formatDriverAssignment(session, company, orders = []) {
   const plain = session.toObject ? session.toObject() : { ...session };
   const status = normalizeSessionStatus(plain.status);
-  const canConfirmDelivery = OUT_FOR_DELIVERY_STATUSES.has(status) || status === SESSION_STATUSES.OUT_FOR_DELIVERY;
+  const sessionOutForDelivery =
+    OUT_FOR_DELIVERY_STATUSES.has(status) || status === SESSION_STATUSES.OUT_FOR_DELIVERY;
+  const ordersHandedOver = orders.length > 0
+    && orders.every((o) => HANDOVER_COMPLETE_ORDER_STATUSES.has(o.status));
+  const stopsHandedOver = (plain.storeStops || []).length > 0
+    && (plain.storeStops || []).every((s) =>
+      s.collectionStatus === "collected"
+      || HANDOVER_COMPLETE_ORDER_STATUSES.has(s.orderStatus)
+    );
+  // Unlock deliver action once the store has handed over — even if session
+  // status briefly lagged behind the order status.
+  const canConfirmDelivery = sessionOutForDelivery || ordersHandedOver || stopsHandedOver;
 
   return {
     id: plain._id,
     _id: plain._id,
     referenceNumber: plain.orderNumber || `#${String(plain._id).slice(-6)}`,
-    status,
+    status: canConfirmDelivery && !sessionOutForDelivery
+      ? SESSION_STATUSES.OUT_FOR_DELIVERY
+      : status,
     statusLabel: canConfirmDelivery ? "قيد التوصيل" : "معيّن لسائق",
     customerName: plain.customerName || "",
     customerPhone: plain.customerPhone || "",
@@ -306,7 +326,11 @@ async function listActiveAssignments(user) {
 
   const result = [];
   for (const session of sessions) {
-    const refreshed = await deliverySessionService.refreshStoreStopsFromOrders(session);
+    // Heal DRIVER_ASSIGNED → OUT_FOR_DELIVERY when store already handed over.
+    await deliverySessionService.reconcileSessionFromOrders(session._id).catch(() => null);
+    const fresh = await DeliverySession.findById(session._id);
+    if (!fresh) continue;
+    const refreshed = await deliverySessionService.refreshStoreStopsFromOrders(fresh);
     const orders = await loadOrdersForSession(refreshed);
     result.push(formatDriverAssignment(refreshed, company, orders));
   }
@@ -348,7 +372,9 @@ async function getAssignmentDetail(user, sessionId) {
     throw err;
   }
 
-  const refreshed = await deliverySessionService.refreshStoreStopsFromOrders(session);
+  await deliverySessionService.reconcileSessionFromOrders(session._id).catch(() => null);
+  const fresh = await DeliverySession.findById(session._id);
+  const refreshed = await deliverySessionService.refreshStoreStopsFromOrders(fresh || session);
   const company = await DeliveryCompany.findById(driver.deliveryCompany).select("name phone whatsapp").lean();
   const orders = await loadOrdersForSession(refreshed);
   return formatDriverAssignment(refreshed, company, orders);
@@ -372,6 +398,15 @@ async function completeDelivery(user, sessionId, body = {}) {
     throw err;
   }
 
+  // Heal lagged handoff before enforcing out_for_delivery gate.
+  await deliverySessionService.reconcileSessionFromOrders(session._id).catch(() => null);
+  const healed = await DeliverySession.findById(session._id);
+  if (healed) {
+    session.status = healed.status;
+    session.storeStops = healed.storeStops;
+    session.statusTimeline = healed.statusTimeline;
+  }
+
   const current = normalizeSessionStatus(session.status);
   if (DELIVERED_SESSION_STATUSES.has(current)) {
     return formatDriverAssignment(
@@ -385,11 +420,25 @@ async function completeDelivery(user, sessionId, body = {}) {
     return formatDriverAssignment(session, null, await loadOrdersForSession(session));
   }
 
+  const ordersForGate = await loadOrdersForSession(session);
+  const ordersHandedOver = ordersForGate.length > 0
+    && ordersForGate.every((o) => HANDOVER_COMPLETE_ORDER_STATUSES.has(o.status));
   const allowed = new Set([...OUT_FOR_DELIVERY_STATUSES, SESSION_STATUSES.OUT_FOR_DELIVERY]);
-  if (!allowed.has(current) && !allowed.has(session.status)) {
+  if (!allowed.has(current) && !allowed.has(session.status) && !ordersHandedOver) {
     const err = new Error("لا يمكن تأكيد التسليم قبل استلام الطلب من المتجر");
     err.status = 400;
     throw err;
+  }
+
+  // Persist out_for_delivery if we are completing from a lagged driver_assigned session.
+  if (!allowed.has(current) && ordersHandedOver) {
+    session.status = SESSION_STATUSES.OUT_FOR_DELIVERY;
+    session.statusTimeline = session.statusTimeline || [];
+    session.statusTimeline.push({
+      status: SESSION_STATUSES.OUT_FOR_DELIVERY,
+      at: new Date(),
+      note: "استلم السائق الطلب من المتجر",
+    });
   }
 
   const proofImage = body.deliveryProof
@@ -402,7 +451,7 @@ async function completeDelivery(user, sessionId, body = {}) {
   }
   const note = cleanString(body.deliveryNote, { field: "deliveryNote", max: 1000 }) || "";
   const company = await DeliveryCompany.findById(driver.deliveryCompany).select("name phone whatsapp").lean();
-  const ordersForSnap = await loadOrdersForSession(session);
+  const ordersForSnap = ordersForGate.length ? ordersForGate : await loadOrdersForSession(session);
   const verificationCodes = [
     ...new Set(
       [
