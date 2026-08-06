@@ -17,6 +17,9 @@ async function attachUserDoc(req, res, next) {
         .lean();
       if (req.userDoc) {
         req.userDoc._id = req.userDoc._id || req.user.id;
+        // Mirror delivery refs onto req.user so services that expect them work.
+        req.user.deliveryCompanyId = req.userDoc.deliveryCompanyId || null;
+        req.user.deliveryDriverId = req.userDoc.deliveryDriverId || null;
       }
     }
     next();

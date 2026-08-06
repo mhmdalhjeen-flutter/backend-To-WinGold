@@ -93,7 +93,7 @@ async function notifyDriver(driverRef, { type, title, body, session }) {
       body: body || "",
       data: {
         ...sessionData(session),
-        url: `/driver/deliveries/${session?._id || session?.id || ""}`,
+        url: `/driver/delivery/${session?._id || session?.id || ""}`,
       },
     });
   } catch (err) {

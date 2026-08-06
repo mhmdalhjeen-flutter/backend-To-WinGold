@@ -34,15 +34,24 @@ const HISTORY_DRIVER_SESSION_STATUSES = new Set([
 ]);
 
 async function resolveDriverFromUser(user) {
-  if (!user?.deliveryDriverId) {
+  let driver = null;
+
+  if (user?.deliveryDriverId) {
+    driver = await DeliveryCompanyDriver.findById(user.deliveryDriverId);
+  }
+
+  // Fallback: auth middleware's thin req.user may omit deliveryDriverId —
+  // resolve via DeliveryCompanyDriver.userId ↔ User._id.
+  if (!driver) {
+    const userId = user?._id || user?.id;
+    if (userId) {
+      driver = await DeliveryCompanyDriver.findOne({ userId });
+    }
+  }
+
+  if (!driver) {
     const err = new Error("حساب السائق غير مربوط");
     err.status = 403;
-    throw err;
-  }
-  const driver = await DeliveryCompanyDriver.findById(user.deliveryDriverId);
-  if (!driver) {
-    const err = new Error("سجل السائق غير موجود");
-    err.status = 404;
     throw err;
   }
   if (!driver.isActive) {
@@ -144,6 +153,15 @@ async function registerDriver({ registrationToken, name, phone, password, confir
   const driverName = cleanString(name, { field: "name", max: 120, required: true });
   const hashed = await bcrypt.hash(password, 10);
 
+  // Link an existing company contact record (same phone, no login) instead of
+  // creating a duplicate — otherwise the company can assign the contact row
+  // while the logged-in driver is tied to a different DeliveryCompanyDriver._id.
+  let driver = await DeliveryCompanyDriver.findOne({
+    deliveryCompany: company._id,
+    phone: normalizedPhone,
+    $or: [{ userId: null }, { userId: { $exists: false } }],
+  });
+
   const user = await User.create({
     name: driverName,
     phone: normalizedPhone,
@@ -155,14 +173,22 @@ async function registerDriver({ registrationToken, name, phone, password, confir
     isVerified: true,
   });
 
-  const driver = await DeliveryCompanyDriver.create({
-    deliveryCompany: company._id,
-    name: driverName,
-    phone: normalizedPhone,
-    whatsapp: normalizedPhone,
-    userId: user._id,
-    isActive: true,
-  });
+  if (driver) {
+    driver.name = driverName;
+    driver.whatsapp = driver.whatsapp || normalizedPhone;
+    driver.userId = user._id;
+    driver.isActive = true;
+    await driver.save();
+  } else {
+    driver = await DeliveryCompanyDriver.create({
+      deliveryCompany: company._id,
+      name: driverName,
+      phone: normalizedPhone,
+      whatsapp: normalizedPhone,
+      userId: user._id,
+      isActive: true,
+    });
+  }
 
   user.deliveryDriverId = driver._id;
   await user.save();
@@ -248,9 +274,21 @@ function formatDriverAssignment(session, company, orders = []) {
 
 async function listActiveAssignments(user) {
   const driver = await resolveDriverFromUser(user);
+  // Include sibling contact rows with the same phone (company-created then
+  // self-registered) so assignments saved against either _id are visible.
+  const siblingIds = await DeliveryCompanyDriver.find({
+    deliveryCompany: driver.deliveryCompany,
+    phone: driver.phone,
+  })
+    .select("_id")
+    .lean();
+  const driverIds = siblingIds.length
+    ? siblingIds.map((d) => d._id)
+    : [driver._id];
+
   const sessions = await DeliverySession.find({
     deliveryCompany: driver.deliveryCompany,
-    "assignedDriver.driverId": driver._id,
+    "assignedDriver.driverId": { $in: driverIds },
     status: { $in: [...ACTIVE_DRIVER_SESSION_STATUSES] },
   })
     .sort({ updatedAt: -1 })
@@ -269,9 +307,19 @@ async function listActiveAssignments(user) {
 
 async function listDeliveryHistory(user, { limit = 50 } = {}) {
   const driver = await resolveDriverFromUser(user);
+  const siblingIds = await DeliveryCompanyDriver.find({
+    deliveryCompany: driver.deliveryCompany,
+    phone: driver.phone,
+  })
+    .select("_id")
+    .lean();
+  const driverIds = siblingIds.length
+    ? siblingIds.map((d) => d._id)
+    : [driver._id];
+
   const sessions = await DeliverySession.find({
     deliveryCompany: driver.deliveryCompany,
-    "assignedDriver.driverId": driver._id,
+    "assignedDriver.driverId": { $in: driverIds },
     status: { $in: [...HISTORY_DRIVER_SESSION_STATUSES] },
   })
     .sort({ driverDeliveredAt: -1, updatedAt: -1 })
@@ -286,10 +334,20 @@ async function listDeliveryHistory(user, { limit = 50 } = {}) {
 async function getAssignmentDetail(user, sessionId) {
   const driver = await resolveDriverFromUser(user);
   const id = requireObjectId(sessionId, "sessionId");
+  const siblingIds = await DeliveryCompanyDriver.find({
+    deliveryCompany: driver.deliveryCompany,
+    phone: driver.phone,
+  })
+    .select("_id")
+    .lean();
+  const driverIds = siblingIds.length
+    ? siblingIds.map((d) => d._id)
+    : [driver._id];
+
   const session = await DeliverySession.findOne({
     _id: id,
     deliveryCompany: driver.deliveryCompany,
-    "assignedDriver.driverId": driver._id,
+    "assignedDriver.driverId": { $in: driverIds },
   });
 
   if (!session) {
@@ -308,11 +366,20 @@ async function completeDelivery(user, sessionId, body = {}) {
   const driver = await resolveDriverFromUser(user);
   const id = requireObjectId(sessionId, "sessionId");
   const clientSyncId = cleanString(body.clientSyncId, { field: "clientSyncId", max: 120 }) || "";
+  const siblingIds = await DeliveryCompanyDriver.find({
+    deliveryCompany: driver.deliveryCompany,
+    phone: driver.phone,
+  })
+    .select("_id")
+    .lean();
+  const driverIds = siblingIds.length
+    ? siblingIds.map((d) => d._id)
+    : [driver._id];
 
   const session = await DeliverySession.findOne({
     _id: id,
     deliveryCompany: driver.deliveryCompany,
-    "assignedDriver.driverId": driver._id,
+    "assignedDriver.driverId": { $in: driverIds },
   });
 
   if (!session) {
