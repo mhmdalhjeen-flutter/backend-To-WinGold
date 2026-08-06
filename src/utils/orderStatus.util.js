@@ -137,10 +137,10 @@ const STATUS_LABELS = {
   delivery_handover_complete: 'اكتمل تسليم الطلب للسائق',
   preparing: 'قيد التحضير',
   delivered_to_driver: 'تم التسليم للسائق',
-  delivered_to_customer: 'تم التسليم للزبون',
+  delivered_to_customer: 'تم استلام الطلب بنجاح',
   confirmed: 'مؤكّد',
   rejected: 'مرفوض',
-  delivered: 'تم التسليم',
+  delivered: 'تم استلام الطلب بنجاح',
   cancelled: 'ملغى',
   completed_off_platform: 'اكتمل خارج المنصة',
 };

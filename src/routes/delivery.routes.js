@@ -68,6 +68,9 @@ router.put("/company/drivers/:driverId", deliveryCompanyPortalController.updateD
 router.delete("/company/drivers/:driverId", deliveryCompanyPortalController.deleteDriver);
 router.get("/company/driver-registration-password", deliveryCompanyPortalController.getDriverRegistrationPasswordStatus);
 router.put("/company/driver-registration-password", deliveryCompanyPortalController.setDriverRegistrationPassword);
+router.get("/company/proofs", deliveryCompanyPortalController.listProofs);
+router.get("/company/proofs/filter-options", deliveryCompanyPortalController.listProofFilterOptions);
+router.get("/company/proofs/:proofId", deliveryCompanyPortalController.getProof);
 
 // ── Driver portal ──
 router.use("/driver", authMiddleware, roleMiddleware(["delivery_driver"]), attachUserDoc);

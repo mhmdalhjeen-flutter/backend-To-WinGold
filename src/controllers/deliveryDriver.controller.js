@@ -50,7 +50,7 @@ exports.completeDelivery = async (req, res) => {
         clientSyncId: req.body.clientSyncId,
       },
     );
-    res.json({ assignment, message: "تم التسليم بنجاح" });
+    res.json({ assignment, message: "تم استلام الطلب بنجاح" });
   } catch (err) {
     res.status(err.status || 400).json({ message: err.message });
   }

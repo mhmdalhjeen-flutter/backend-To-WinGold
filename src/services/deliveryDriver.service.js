@@ -246,6 +246,7 @@ function formatDriverAssignment(session, company, orders = []) {
     customerName: plain.customerName || "",
     customerPhone: plain.customerPhone || "",
     customerWhatsapp: plain.customerWhatsapp || plain.customerPhone || "",
+    customerId: plain.customer?._id || plain.customer || null,
     deliveryAddress: plain.deliveryAddress || "",
     deliveryArea: plain.deliveryArea || "",
     deliveryFee: plain.deliveryFee ?? 0,
@@ -411,22 +412,63 @@ async function completeDelivery(user, sessionId, body = {}) {
   const proofImage = body.deliveryProof
     ? await processOptionalImage(body.deliveryProof, { maxWidth: 1600, enforceCloudinaryHttps: true })
     : "";
+  if (!proofImage && !session.driverDeliveryProof) {
+    const err = new Error("صورة إثبات التسليم مطلوبة");
+    err.status = 400;
+    throw err;
+  }
   const note = cleanString(body.deliveryNote, { field: "deliveryNote", max: 1000 }) || "";
+  const company = await DeliveryCompany.findById(driver.deliveryCompany).select("name phone whatsapp").lean();
+  const ordersForSnap = await loadOrdersForSession(session);
+  const verificationCodes = [
+    ...new Set(
+      [
+        ...(session.storeStops || []).map((s) => s.verificationCode),
+        ...ordersForSnap.map((o) => o.verificationCode),
+      ].filter(Boolean),
+    ),
+  ];
+  const orderNumbers = [
+    ...new Set(
+      [
+        ...(session.storeStops || []).map((s) => s.orderNumber),
+        ...ordersForSnap.map((o) => o.orderNumber),
+      ].filter(Boolean),
+    ),
+  ];
+  const deliveredAt = new Date();
+  const finalPhoto = proofImage || session.driverDeliveryProof || "";
 
-  session.driverDeliveryProof = proofImage || session.driverDeliveryProof || "";
+  session.driverDeliveryProof = finalPhoto;
   session.driverDeliveryNote = note;
-  session.driverDeliveredAt = new Date();
+  session.driverDeliveredAt = deliveredAt;
   if (clientSyncId) session.driverCompletionSyncId = clientSyncId;
+  session.deliveryProofSnapshot = {
+    photo: finalPhoto,
+    note,
+    deliveredAt,
+    driverId: driver._id,
+    driverName: driver.name || session.assignedDriver?.name || "",
+    driverPhone: driver.phone || session.assignedDriver?.phone || "",
+    companyId: company?._id || driver.deliveryCompany,
+    companyName: company?.name || "",
+    verificationCode: verificationCodes[0] || "",
+    verificationCodes,
+    orderIds: (session.orders || []).map((o) => o._id || o),
+    orderNumbers,
+    customerName: session.customerName || "",
+    customerPhone: session.customerPhone || "",
+  };
   session.status = SESSION_STATUSES.COMPLETED;
   session.statusTimeline = session.statusTimeline || [];
   session.statusTimeline.push({
     status: SESSION_STATUSES.COMPLETED,
-    at: new Date(),
-    note: note || "تم التسليم بنجاح",
+    at: deliveredAt,
+    note: note || "تم استلام الطلب بنجاح",
   });
   await session.save();
 
-  const now = new Date();
+  const now = deliveredAt;
   const deleteAfter = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
   const orderIds = (session.orders || []).map((o) => o._id || o);
   if (orderIds.length) {
@@ -447,14 +489,13 @@ async function completeDelivery(user, sessionId, body = {}) {
           statusTimeline: {
             status: "delivered_to_customer",
             at: now,
-            note: note || "تم التسليم بنجاح",
+            note: note || "تم استلام الطلب بنجاح",
           },
         },
       },
     );
   }
 
-  const company = await DeliveryCompany.findById(driver.deliveryCompany).select("name phone whatsapp").lean();
   const formatted = deliverySessionService.formatSessionDetails(session, company);
 
   setImmediate(() => {
@@ -465,8 +506,7 @@ async function completeDelivery(user, sessionId, body = {}) {
     ).catch(() => {});
   });
 
-  const orders = await loadOrdersForSession(session);
-  return formatDriverAssignment(session, company, orders);
+  return formatDriverAssignment(session, company, ordersForSnap);
 }
 
 async function syncOfflineCompletions(user, items = []) {

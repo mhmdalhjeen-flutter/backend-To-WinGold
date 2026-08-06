@@ -238,15 +238,15 @@ async function onOutForDelivery(session, extra = {}) {
 async function onCompleted(session) {
   await notifyCustomer(session.customer, {
     type: "delivery_completed",
-    title: "تم التسليم بنجاح",
-    body: "تم تسليم طلبك بنجاح — شكراً لاستخدامك المنصة",
+    title: "تم استلام الطلب بنجاح",
+    body: "تم استلام طلبك بنجاح — شكراً لاستخدامك المنصة",
     session,
   });
 
   await notifyCompanyUsers(session.deliveryCompany, {
     type: "delivery_completed",
     title: "تم إكمال التوصيل",
-    body: `تم تسليم الطلب بنجاح${session.customerName ? ` — ${session.customerName}` : ""}`,
+    body: `تم استلام الطلب بنجاح${session.customerName ? ` — ${session.customerName}` : ""}`,
     session,
   });
 }

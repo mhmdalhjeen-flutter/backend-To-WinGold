@@ -29,7 +29,7 @@ const SESSION_STATUS_LABELS = {
   [SESSION_STATUSES.DRIVER_ASSIGNED]: "معيّن لسائق",
   [SESSION_STATUSES.ACCEPTED]: "مقبول من الشركة",
   [SESSION_STATUSES.OUT_FOR_DELIVERY]: "قيد التوصيل",
-  [SESSION_STATUSES.COMPLETED]: "تم التسليم",
+  [SESSION_STATUSES.COMPLETED]: "تم استلام الطلب بنجاح",
   [SESSION_STATUSES.REJECTED]: "مرفوض",
   [SESSION_STATUSES.CANCELLED]: "ملغى",
 };
@@ -42,7 +42,7 @@ const CUSTOMER_STATUS_LABELS = {
   [SESSION_STATUSES.DRIVER_ASSIGNED]: "تم تعيين سائق وسيتوجه إلى المتجر قريباً",
   [SESSION_STATUSES.ACCEPTED]: "مقبول",
   [SESSION_STATUSES.OUT_FOR_DELIVERY]: "طلبك في الطريق",
-  [SESSION_STATUSES.COMPLETED]: "تم التسليم",
+  [SESSION_STATUSES.COMPLETED]: "تم استلام الطلب بنجاح",
   [SESSION_STATUSES.REJECTED]: "مرفوض",
   [SESSION_STATUSES.CANCELLED]: "ملغى",
 };
@@ -145,11 +145,11 @@ const STORE_STOP_LABELS = {
   delivery_handover_complete: "اكتمل تسليم الطلب للسائق",
   preparing: "قيد التحضير",
   delivered_to_driver: "تم التسليم للسائق",
-  delivered_to_customer: "تم التسليم",
+  delivered_to_customer: "تم استلام الطلب بنجاح",
   confirmed: "مؤكّد",
   rejected: "مرفوض",
   cancelled: "ملغى",
-  delivered: "تم التسليم",
+  delivered: "تم استلام الطلب بنجاح",
   completed_off_platform: "اكتمل خارج المنصة",
 };
 

@@ -1,6 +1,7 @@
 const deliverySessionService = require("../services/deliverySession.service");
 const deliveryCompanyPortalService = require("../services/deliveryCompanyPortal.service");
 const deliveryCompanyDriverService = require("../services/deliveryCompanyDriver.service");
+const deliveryProofService = require("../services/deliveryProof.service");
 const { requireObjectId } = require("../utils/inputSecurity.util");
 
 exports.getDashboardStats = async (req, res) => {
@@ -260,6 +261,62 @@ exports.getDriverRegistrationPasswordStatus = async (req, res) => {
     const deliveryDriverService = require("../services/deliveryDriver.service");
     const data = await deliveryDriverService.getDriverRegistrationPasswordStatus(req.userDoc || req.user);
     res.json(data);
+  } catch (err) {
+    res.status(err.status || 500).json({ message: err.message });
+  }
+};
+
+exports.listProofs = async (req, res) => {
+  try {
+    const companyId = (req.userDoc || req.user)?.deliveryCompanyId;
+    if (!companyId) {
+      return res.status(403).json({ message: "حساب الشركة غير مربوط بشركة توصيل" });
+    }
+    const proofs = await deliveryProofService.listProofs(
+      {
+        driverId: req.query.driverId,
+        from: req.query.from,
+        to: req.query.to,
+        q: req.query.q,
+        verificationCode: req.query.verificationCode,
+        customer: req.query.customer,
+      },
+      {
+        companyId,
+        includeCompany: false,
+        limit: req.query.limit,
+      },
+    );
+    res.json({ proofs });
+  } catch (err) {
+    res.status(err.status || 500).json({ message: err.message });
+  }
+};
+
+exports.getProof = async (req, res) => {
+  try {
+    const companyId = (req.userDoc || req.user)?.deliveryCompanyId;
+    if (!companyId) {
+      return res.status(403).json({ message: "حساب الشركة غير مربوط بشركة توصيل" });
+    }
+    const proof = await deliveryProofService.getProofById(req.params.proofId, {
+      companyId,
+      includeCompany: false,
+    });
+    res.json({ proof });
+  } catch (err) {
+    res.status(err.status || 404).json({ message: err.message });
+  }
+};
+
+exports.listProofFilterOptions = async (req, res) => {
+  try {
+    const companyId = (req.userDoc || req.user)?.deliveryCompanyId;
+    if (!companyId) {
+      return res.status(403).json({ message: "حساب الشركة غير مربوط بشركة توصيل" });
+    }
+    const options = await deliveryProofService.listProofFilterOptions({ companyId });
+    res.json(options);
   } catch (err) {
     res.status(err.status || 500).json({ message: err.message });
   }

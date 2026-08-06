@@ -26,6 +26,7 @@ const displayPriorityAdmin = require("../../controllers/admin/display-priority-a
 const userCenter = require("../../controllers/user-center.controller");
 const usersAdmin = require("../../controllers/admin/users-admin.controller");
 const deliveryCompanyAdmin = require("../../controllers/admin/delivery-company-admin.controller");
+const deliveryProofAdmin = require("../../controllers/admin/delivery-proof-admin.controller");
 const auditController = require("../../controllers/admin/audit.controller");
 const adminAuditMiddleware = require("../../middleware/adminAudit.middleware");
 const { requireObjectId } = require("../../utils/inputSecurity.util");
@@ -482,5 +483,9 @@ router.put("/delivery-companies/:id/payment-accounts/:accountId", deliveryCompan
 router.delete("/delivery-companies/:id/payment-accounts/:accountId", deliveryCompanyAdmin.deletePaymentAccount);
 router.post("/delivery-companies/:id/portal-account", deliveryCompanyAdmin.createPortalAccount);
 router.put("/delivery-companies/:id/portal-account", deliveryCompanyAdmin.updatePortalAccount);
+
+router.get("/delivery-proofs", deliveryProofAdmin.list);
+router.get("/delivery-proofs/filter-options", deliveryProofAdmin.filterOptions);
+router.get("/delivery-proofs/:id", deliveryProofAdmin.getOne);
 
 module.exports = router;

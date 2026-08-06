@@ -101,6 +101,23 @@ const deliverySessionSchema = new mongoose.Schema(
     driverDeliveryNote: { type: String, default: "", maxlength: 1000 },
     driverDeliveredAt: { type: Date, default: null },
     driverCompletionSyncId: { type: String, default: "", index: true, sparse: true },
+    /** Immutable snapshot captured at delivery confirmation */
+    deliveryProofSnapshot: {
+      photo: { type: String, default: "" },
+      note: { type: String, default: "", maxlength: 1000 },
+      deliveredAt: { type: Date, default: null },
+      driverId: { type: mongoose.Schema.Types.ObjectId, ref: "DeliveryCompanyDriver", default: null },
+      driverName: { type: String, default: "" },
+      driverPhone: { type: String, default: "" },
+      companyId: { type: mongoose.Schema.Types.ObjectId, ref: "DeliveryCompany", default: null },
+      companyName: { type: String, default: "" },
+      verificationCode: { type: String, default: "" },
+      verificationCodes: { type: [String], default: [] },
+      orderIds: [{ type: mongoose.Schema.Types.ObjectId, ref: "Order" }],
+      orderNumbers: { type: [String], default: [] },
+      customerName: { type: String, default: "" },
+      customerPhone: { type: String, default: "" },
+    },
   },
   { timestamps: true },
 );
@@ -109,6 +126,9 @@ deliverySessionSchema.index({ deliveryCompany: 1, status: 1, createdAt: -1 });
 deliverySessionSchema.index({ driver: 1, status: 1, createdAt: -1 });
 deliverySessionSchema.index({ customer: 1, status: 1, createdAt: -1 });
 deliverySessionSchema.index({ customer: 1, sessionId: 1 }, { unique: true, sparse: true });
+deliverySessionSchema.index({ "deliveryProofSnapshot.deliveredAt": -1 });
+deliverySessionSchema.index({ "deliveryProofSnapshot.verificationCode": 1 });
+deliverySessionSchema.index({ "deliveryProofSnapshot.driverId": 1, "deliveryProofSnapshot.deliveredAt": -1 });
 
 const COLLECTION = "deliverygroups";
 

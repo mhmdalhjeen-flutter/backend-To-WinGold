@@ -11,7 +11,7 @@ const TIMELINE_STEP_DEFS = [
   { key: 'driver_assigned', label: 'تم تعيين السائق' },
   { key: 'driver_collected', label: 'استلم السائق الطلب' },
   { key: 'on_the_way', label: 'الطلب في الطريق' },
-  { key: 'delivered', label: 'تم التسليم بنجاح' },
+  { key: 'delivered', label: 'تم استلام الطلب بنجاح' },
 ];
 
 const POST_PENDING_STATUSES = new Set([
@@ -206,8 +206,8 @@ function getCustomerDeliveryStatusMessage(order, delivery) {
 
   if (DELIVERED_ORDER_STATUSES.has(legacyStatus) || sessionStatus === SESSION_STATUSES.COMPLETED) {
     return {
-      title: 'تم التسليم بنجاح',
-      body: 'تم تسليم طلبك',
+      title: 'تم استلام الطلب بنجاح',
+      body: 'تم استلام طلبك بنجاح',
       ...carrier,
     };
   }
