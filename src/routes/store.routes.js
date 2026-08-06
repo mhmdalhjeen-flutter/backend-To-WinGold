@@ -28,6 +28,7 @@ const {
 } = require("../controllers/store.controller");
 const {
   listMyPaymentMethods,
+  updateMyPaymentMethodToggles,
   createMyPaymentMethod,
   updateMyPaymentMethod,
   activateMyPaymentMethod,
@@ -72,6 +73,7 @@ router.post("/my/item-categories", authMiddleware, roleMiddleware.business, requ
 router.patch("/my/item-categories/:id", authMiddleware, roleMiddleware.business, requireStoreSubscription, updateItemCategory);
 router.delete("/my/item-categories/:id", authMiddleware, roleMiddleware.business, requireStoreSubscription, deleteItemCategory);
 router.get("/my/payment-methods", authMiddleware, roleMiddleware.business, requireStoreSubscription, listMyPaymentMethods);
+router.patch("/my/payment-methods/toggles", authMiddleware, roleMiddleware.business, requireStoreSubscription, updateMyPaymentMethodToggles);
 router.post("/my/payment-methods", authMiddleware, roleMiddleware.business, requireStoreSubscription, createMyPaymentMethod);
 router.patch("/my/payment-methods/:id", authMiddleware, roleMiddleware.business, requireStoreSubscription, updateMyPaymentMethod);
 router.patch("/my/payment-methods/:id/activate", authMiddleware, roleMiddleware.business, requireStoreSubscription, activateMyPaymentMethod);

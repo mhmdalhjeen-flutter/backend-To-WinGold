@@ -16,7 +16,7 @@ const {
   requireObjectId,
 } = require("../../utils/inputSecurity.util");
 const { processOptionalImage } = require("../../utils/imageProcess.util");
-const { normalizePaymentType, isValidPaymentType } = require("../../utils/paymentMethodTypes.util");
+const { normalizePaymentType, isValidPaymentType, normalizeAccountKind } = require("../../utils/paymentMethodTypes.util");
 
 const { normalizeLocalPhone } = require("../../utils/phone.util");
 const { cleanAuthPassword } = require("../../utils/authValidation.util");
@@ -211,13 +211,8 @@ async function listCompaniesWithAccounts() {
 }
 
 function applyPaymentMethods(company, paymentMethods = {}) {
-  if (!paymentMethods || typeof paymentMethods !== "object") return;
-  const keys = ["cashOnDelivery", "bankPalestine", "palPay", "jawwalPay"];
-  keys.forEach((key) => {
-    if (paymentMethods[key]?.enabled !== undefined) {
-      company.paymentMethods[key] = { enabled: Boolean(paymentMethods[key].enabled) };
-    }
-  });
+  const { applyPaymentMethodToggles, DEFAULT_DELIVERY_PAYMENT_TOGGLES } = require("../../utils/paymentMethodTypes.util");
+  applyPaymentMethodToggles(company, paymentMethods, DEFAULT_DELIVERY_PAYMENT_TOGGLES);
 }
 
 exports.list = async (_req, res) => {
@@ -498,6 +493,7 @@ exports.createPaymentAccount = async (req, res) => {
       type,
       accountName: cleanString(req.body.accountName, { field: "accountName", max: 120, required: true }),
       accountNumber: cleanString(req.body.accountNumber, { field: "accountNumber", max: 64, required: true }),
+      accountType: normalizeAccountKind(req.body.accountType),
       iban: cleanString(req.body.iban, { field: "iban", max: 64 }),
       qrCodeUrl,
       isActive: wantsActive,
@@ -534,6 +530,9 @@ exports.updatePaymentAccount = async (req, res) => {
     }
     if (req.body.accountNumber !== undefined) {
       account.accountNumber = cleanString(req.body.accountNumber, { field: "accountNumber", max: 64, required: true });
+    }
+    if (req.body.accountType !== undefined) {
+      account.accountType = normalizeAccountKind(req.body.accountType);
     }
     if (req.body.iban !== undefined) {
       account.iban = cleanString(req.body.iban, { field: "iban", max: 64 });

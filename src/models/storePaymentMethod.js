@@ -26,6 +26,12 @@ const storePaymentMethodSchema = new mongoose.Schema(
       trim: true,
       maxlength: 64,
     },
+    /** merchant | personal */
+    accountType: {
+      type: String,
+      enum: ["merchant", "personal"],
+      default: "merchant",
+    },
     iban: {
       type: String,
       default: "",

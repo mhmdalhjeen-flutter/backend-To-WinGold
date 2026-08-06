@@ -16,6 +16,11 @@ const deliveryCompanyPaymentAccountSchema = new mongoose.Schema(
     },
     accountName: { type: String, required: true, trim: true, maxlength: 120 },
     accountNumber: { type: String, required: true, trim: true, maxlength: 64 },
+    accountType: {
+      type: String,
+      enum: ["merchant", "personal"],
+      default: "merchant",
+    },
     iban: { type: String, default: "", trim: true, maxlength: 64 },
     qrCodeUrl: { type: String, default: "" },
     isActive: { type: Boolean, default: false },

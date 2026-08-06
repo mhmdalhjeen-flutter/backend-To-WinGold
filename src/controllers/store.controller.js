@@ -58,8 +58,8 @@ function stripBase64Logo(store) {
 
 async function attachStorePaymentSettings(storeObj) {
   if (!storeObj?._id) return storeObj;
-  const paymentSettings = await paymentMethodService.buildPaymentSettingsForStore(storeObj._id);
-  return { ...storeObj, paymentSettings };
+  const { paymentSettings, enabledPaymentMethods } = await paymentMethodService.buildPaymentSettingsForStore(storeObj);
+  return { ...storeObj, paymentSettings, enabledPaymentMethods };
 }
 
 // ================= إنشاء متجر جديد =================

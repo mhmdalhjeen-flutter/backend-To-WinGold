@@ -22,6 +22,7 @@ const deliveryCompanySchema = new mongoose.Schema(
     servedRegionIds: [{ type: mongoose.Schema.Types.ObjectId, ref: "Region" }],
     paymentMethods: {
       cashOnDelivery: { type: methodToggleSchema, default: () => ({ enabled: true }) },
+      agreementWithStore: { type: methodToggleSchema, default: () => ({ enabled: false }) },
       bankPalestine: { type: methodToggleSchema, default: () => ({ enabled: false }) },
       palPay: { type: methodToggleSchema, default: () => ({ enabled: false }) },
       jawwalPay: { type: methodToggleSchema, default: () => ({ enabled: false }) },

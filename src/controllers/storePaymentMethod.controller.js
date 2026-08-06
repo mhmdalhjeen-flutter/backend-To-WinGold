@@ -15,9 +15,22 @@ async function getOwnerStore(userId) {
 exports.listMyPaymentMethods = async (req, res) => {
   try {
     const store = await getOwnerStore(req.user.id);
-    const methods = await paymentMethodService.listForStore(store._id);
-    const types = paymentMethodService.getPaymentMethodTypes();
-    res.json({ methods, types });
+    const payload = await paymentMethodService.getOwnerPaymentSettings(store);
+    res.json(payload);
+  } catch (error) {
+    res.status(error.status || 500).json({ message: error.message });
+  }
+};
+
+exports.updateMyPaymentMethodToggles = async (req, res) => {
+  try {
+    assertNoMongoOperators(req.body, "paymentMethods");
+    const store = await getOwnerStore(req.user.id);
+    const payload = await paymentMethodService.updateStorePaymentToggles(
+      store,
+      req.body.paymentMethods || req.body,
+    );
+    res.json({ message: "تم تحديث طرق الدفع", ...payload });
   } catch (error) {
     res.status(error.status || 500).json({ message: error.message });
   }
@@ -73,17 +86,23 @@ exports.getPaymentMethodTypes = async (_req, res) => {
   }
 };
 
-/** Public checkout — active payment accounts only. */
+/** Public checkout — enabled methods + active accounts only (via paymentSettings). */
 exports.getActiveStorePaymentMethods = async (req, res) => {
   try {
     const storeId = req.params.storeId;
-    const store = await Store.findById(storeId).select("_id name isActive").lean();
+    const store = await Store.findById(storeId).select("_id name isActive paymentMethods").lean();
     if (!store) {
       return res.status(404).json({ message: "المتجر غير موجود" });
     }
 
+    const { paymentSettings, enabledPaymentMethods } = await paymentMethodService.buildPaymentSettingsForStore(store);
     const methods = await paymentMethodService.getActiveForStore(store._id);
-    res.json({ storeId: store._id, methods });
+    res.json({
+      storeId: store._id,
+      paymentSettings,
+      enabledPaymentMethods,
+      methods,
+    });
   } catch (error) {
     res.status(error.status || 500).json({ message: error.message });
   }

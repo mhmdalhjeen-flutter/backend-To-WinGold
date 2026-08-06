@@ -1,9 +1,15 @@
+const Store = require("../models/store");
 const StorePaymentMethod = require("../models/storePaymentMethod");
 const {
   PAYMENT_METHOD_TYPES,
-  SETTINGS_KEY_BY_TYPE,
+  ALL_PAYMENT_METHOD_DEFS,
+  DEFAULT_STORE_PAYMENT_TOGGLES,
   normalizePaymentType,
   isValidPaymentType,
+  normalizeAccountKind,
+  resolvePaymentToggles,
+  applyPaymentMethodToggles,
+  buildCustomerPaymentPayload,
 } = require("../utils/paymentMethodTypes.util");
 const { processOptionalImage } = require("../utils/imageProcess.util");
 const { cleanString } = require("../utils/inputSecurity.util");
@@ -14,41 +20,68 @@ async function deactivateSiblings(storeId, type, exceptId = null) {
   await StorePaymentMethod.updateMany(query, { $set: { isActive: false } });
 }
 
-/**
- * Build customer-facing paymentSettings from active accounts (one per type).
- */
-async function buildPaymentSettingsForStore(storeId) {
+async function buildPaymentSettingsForStore(storeOrId) {
+  let store = storeOrId;
+  if (!store || !store.paymentMethods) {
+    const id = storeOrId?._id || storeOrId;
+    store = await Store.findById(id).select("paymentMethods").lean();
+  }
+  if (!store) return { paymentSettings: {}, enabledPaymentMethods: [] };
+
+  const toggles = resolvePaymentToggles(store.paymentMethods, DEFAULT_STORE_PAYMENT_TOGGLES);
   const activeAccounts = await StorePaymentMethod.find({
-    store: storeId,
+    store: store._id,
     isActive: true,
   }).lean();
 
-  const settings = {};
-  for (const account of activeAccounts) {
-    const key = SETTINGS_KEY_BY_TYPE[account.type];
-    if (!key) continue;
-    settings[key] = {
-      enabled: true,
-      qrCodeUrl: account.barcodeImage || "",
-      accountOwnerName: account.accountName || "",
-      accountNumber: account.accountNumber || "",
-      iban: account.iban || "",
-    };
-  }
-  return settings;
+  return buildCustomerPaymentPayload(toggles, activeAccounts, "barcodeImage");
+}
+
+/** @deprecated shape helper — prefer buildPaymentSettingsForStore which returns both. */
+async function buildPaymentSettingsObject(storeId) {
+  const { paymentSettings } = await buildPaymentSettingsForStore(storeId);
+  return paymentSettings;
 }
 
 async function getActiveForStore(storeId) {
-  return StorePaymentMethod.find({ store: storeId, isActive: true })
-    .select("type accountName accountNumber iban barcodeImage isActive createdAt updatedAt")
+  const store = await Store.findById(storeId).select("paymentMethods").lean();
+  const toggles = resolvePaymentToggles(store?.paymentMethods, DEFAULT_STORE_PAYMENT_TOGGLES);
+  const accounts = await StorePaymentMethod.find({ store: storeId, isActive: true })
+    .select("type accountName accountNumber accountType iban barcodeImage isActive createdAt updatedAt")
     .sort({ type: 1, createdAt: -1 })
     .lean();
+
+  return accounts.filter((a) => {
+    const type = normalizePaymentType(a.type);
+    const key = type === "bank_palestine" ? "bankPalestine"
+      : type === "palpay" ? "palPay"
+        : type === "jawwal_pay" ? "jawwalPay"
+          : null;
+    return key && toggles[key]?.enabled;
+  });
 }
 
 async function listForStore(storeId) {
   return StorePaymentMethod.find({ store: storeId })
     .sort({ type: 1, isActive: -1, createdAt: -1 })
     .lean();
+}
+
+async function getOwnerPaymentSettings(store) {
+  const toggles = resolvePaymentToggles(store.paymentMethods, DEFAULT_STORE_PAYMENT_TOGGLES);
+  const methods = await listForStore(store._id);
+  return {
+    paymentMethods: toggles,
+    methods,
+    types: PAYMENT_METHOD_TYPES,
+    methodDefs: ALL_PAYMENT_METHOD_DEFS,
+  };
+}
+
+async function updateStorePaymentToggles(store, paymentMethods) {
+  applyPaymentMethodToggles(store, paymentMethods, DEFAULT_STORE_PAYMENT_TOGGLES);
+  await store.save();
+  return getOwnerPaymentSettings(store);
 }
 
 async function createForStore(storeId, body = {}) {
@@ -62,6 +95,7 @@ async function createForStore(storeId, body = {}) {
 
   const accountName = cleanString(body.accountName, { field: "accountName", max: 120, required: true });
   const accountNumber = cleanString(body.accountNumber, { field: "accountNumber", max: 64, required: true });
+  const accountType = normalizeAccountKind(body.accountType);
   const iban = cleanString(body.iban, { field: "iban", max: 64 });
   const barcodeImage = body.barcodeImage
     ? await processOptionalImage(body.barcodeImage, { maxWidth: 800, enforceCloudinaryHttps: true })
@@ -78,6 +112,7 @@ async function createForStore(storeId, body = {}) {
     type,
     accountName,
     accountNumber,
+    accountType,
     iban,
     barcodeImage,
     isActive: wantsActive,
@@ -108,6 +143,9 @@ async function updateForStore(storeId, methodId, body = {}) {
   }
   if (body.accountNumber !== undefined) {
     method.accountNumber = cleanString(body.accountNumber, { field: "accountNumber", max: 64, required: true });
+  }
+  if (body.accountType !== undefined) {
+    method.accountType = normalizeAccountKind(body.accountType);
   }
   if (body.iban !== undefined) {
     method.iban = cleanString(body.iban, { field: "iban", max: 64 });
@@ -169,5 +207,8 @@ module.exports = {
   activateForStore,
   deleteForStore,
   buildPaymentSettingsForStore,
+  buildPaymentSettingsObject,
+  getOwnerPaymentSettings,
+  updateStorePaymentToggles,
   getPaymentMethodTypes,
 };

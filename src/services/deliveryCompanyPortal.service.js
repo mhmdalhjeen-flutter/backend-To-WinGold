@@ -15,7 +15,14 @@ const {
   requireObjectId,
 } = require("../utils/inputSecurity.util");
 const { processOptionalImage } = require("../utils/imageProcess.util");
-const { normalizePaymentType, isValidPaymentType } = require("../utils/paymentMethodTypes.util");
+const {
+  normalizePaymentType,
+  isValidPaymentType,
+  normalizeAccountKind,
+  applyPaymentMethodToggles,
+  DEFAULT_DELIVERY_PAYMENT_TOGGLES,
+  resolvePaymentToggles,
+} = require("../utils/paymentMethodTypes.util");
 
 async function resolveCompanyId(user) {
   const companyId = user?.deliveryCompanyId;
@@ -39,13 +46,7 @@ async function loadOwnCompany(user) {
 }
 
 function applyPaymentMethods(company, paymentMethods = {}) {
-  if (!paymentMethods || typeof paymentMethods !== "object") return;
-  const keys = ["cashOnDelivery", "bankPalestine", "palPay", "jawwalPay"];
-  keys.forEach((key) => {
-    if (paymentMethods[key]?.enabled !== undefined) {
-      company.paymentMethods[key] = { enabled: Boolean(paymentMethods[key].enabled) };
-    }
-  });
+  applyPaymentMethodToggles(company, paymentMethods, DEFAULT_DELIVERY_PAYMENT_TOGGLES);
 }
 
 async function getCompanyProfile(user) {
@@ -93,14 +94,16 @@ async function getPaymentSettings(user) {
     throw err;
   }
   const { company, accounts } = loaded;
+  const paymentMethods = resolvePaymentToggles(company.paymentMethods, DEFAULT_DELIVERY_PAYMENT_TOGGLES);
   return {
-    paymentMethods: company.paymentMethods,
+    paymentMethods,
     paymentSettings: buildPaymentSettingsFromAccounts(company.paymentMethods, accounts),
     accounts: accounts.map((a) => ({
       _id: a._id,
       type: a.type,
       accountName: a.accountName,
       accountNumber: a.accountNumber,
+      accountType: normalizeAccountKind(a.accountType),
       iban: a.iban || "",
       qrCodeUrl: a.qrCodeUrl || "",
       isActive: Boolean(a.isActive),
@@ -146,6 +149,7 @@ async function createPaymentAccount(user, body = {}) {
     type,
     accountName: cleanString(body.accountName, { field: "accountName", max: 120, required: true }),
     accountNumber: cleanString(body.accountNumber, { field: "accountNumber", max: 64, required: true }),
+    accountType: normalizeAccountKind(body.accountType),
     iban: cleanString(body.iban, { field: "iban", max: 64 }),
     qrCodeUrl,
     isActive: wantsActive,
@@ -182,6 +186,9 @@ async function updatePaymentAccount(user, accountId, body = {}) {
   }
   if (body.accountNumber !== undefined) {
     account.accountNumber = cleanString(body.accountNumber, { field: "accountNumber", max: 64, required: true });
+  }
+  if (body.accountType !== undefined) {
+    account.accountType = normalizeAccountKind(body.accountType);
   }
   if (body.iban !== undefined) {
     account.iban = cleanString(body.iban, { field: "iban", max: 64 });

@@ -177,6 +177,15 @@ const storeSchema = new mongoose.Schema({
         acceptsOldCurrency: { type: Boolean, default: false },
         acceptsAllCurrencyTypes: { type: Boolean, default: false },
     },
+
+    /** Enable/disable payment methods shown to customers */
+    paymentMethods: {
+        cashOnDelivery: { enabled: { type: Boolean, default: true } },
+        agreementWithStore: { enabled: { type: Boolean, default: true } },
+        bankPalestine: { enabled: { type: Boolean, default: true } },
+        palPay: { enabled: { type: Boolean, default: true } },
+        jawwalPay: { enabled: { type: Boolean, default: true } },
+    },
 }, {
     timestamps: true,
 });

@@ -1,9 +1,15 @@
 const DeliveryCompany = require("../models/deliveryCompany");
 const DeliveryCompanyPaymentAccount = require("../models/deliveryCompanyPaymentAccount");
-const { SETTINGS_KEY_BY_TYPE } = require("../utils/paymentMethodTypes.util");
+const {
+  DEFAULT_DELIVERY_PAYMENT_TOGGLES,
+  resolvePaymentToggles,
+  buildCustomerPaymentPayload,
+  normalizeAccountKind,
+} = require("../utils/paymentMethodTypes.util");
 
 const CUSTOMER_METHOD_IDS = {
   cashOnDelivery: "cash_on_delivery",
+  agreementWithStore: "seller_agreement",
   bankPalestine: "bank_palestine",
   palPay: "palpay",
   jawwalPay: "jawwal_pay",
@@ -47,34 +53,18 @@ async function listPaymentAccounts(companyId) {
 }
 
 function buildPaymentSettingsFromAccounts(paymentMethods = {}, accounts = []) {
-  const settings = {
-    cashOnDelivery: {
-      enabled: paymentMethods.cashOnDelivery?.enabled !== false,
-    },
-    bankPalestine: { enabled: Boolean(paymentMethods.bankPalestine?.enabled) },
-    palPay: { enabled: Boolean(paymentMethods.palPay?.enabled) },
-    jawwalPay: { enabled: Boolean(paymentMethods.jawwalPay?.enabled) },
-  };
-
-  for (const account of accounts.filter((a) => a.isActive)) {
-    const key = SETTINGS_KEY_BY_TYPE[account.type];
-    if (!key || key === "cashOnDelivery") continue;
-    settings[key] = {
-      enabled: settings[key]?.enabled !== false,
-      qrCodeUrl: account.qrCodeUrl || "",
-      accountOwnerName: account.accountName || "",
-      accountNumber: account.accountNumber || "",
-      iban: account.iban || "",
-    };
-  }
-
-  return settings;
+  const toggles = resolvePaymentToggles(paymentMethods, DEFAULT_DELIVERY_PAYMENT_TOGGLES);
+  const activeAccounts = (accounts || []).filter((a) => a.isActive);
+  return buildCustomerPaymentPayload(toggles, activeAccounts, "qrCodeUrl").paymentSettings;
 }
 
 function buildEnabledPaymentMethods(paymentSettings) {
   const enabled = [];
-  if (paymentSettings.cashOnDelivery?.enabled !== false) {
+  if (paymentSettings.cashOnDelivery?.enabled) {
     enabled.push(CUSTOMER_METHOD_IDS.cashOnDelivery);
+  }
+  if (paymentSettings.agreementWithStore?.enabled) {
+    enabled.push(CUSTOMER_METHOD_IDS.agreementWithStore);
   }
 
   const digitalKeys = [
@@ -85,7 +75,7 @@ function buildEnabledPaymentMethods(paymentSettings) {
 
   digitalKeys.forEach(([settingsKey, methodId]) => {
     const entry = paymentSettings[settingsKey];
-    if (entry?.enabled === false) return;
+    if (!entry?.enabled) return;
     const configured = Boolean(
       entry?.qrCodeUrl || entry?.accountOwnerName || entry?.accountNumber,
     );
@@ -98,8 +88,10 @@ function buildEnabledPaymentMethods(paymentSettings) {
 function toAdminCompany(company, accounts = []) {
   const plain = company.toObject ? company.toObject() : { ...company };
   const servedRegionIds = (plain.servedRegionIds || []).map(String);
+  const paymentMethods = resolvePaymentToggles(plain.paymentMethods, DEFAULT_DELIVERY_PAYMENT_TOGGLES);
   return {
     ...plain,
+    paymentMethods,
     servedRegionIds,
     coverageCount: plain.servesAllRegions ? 0 : servedRegionIds.length,
     paymentAccounts: accounts.map((a) => ({
@@ -107,6 +99,7 @@ function toAdminCompany(company, accounts = []) {
       type: a.type,
       accountName: a.accountName,
       accountNumber: a.accountNumber,
+      accountType: normalizeAccountKind(a.accountType),
       iban: a.iban || "",
       qrCodeUrl: a.qrCodeUrl || "",
       isActive: Boolean(a.isActive),
@@ -116,8 +109,13 @@ function toAdminCompany(company, accounts = []) {
 
 function toCustomerCompany(company, accounts = [], options = {}) {
   const plain = company.toObject ? company.toObject() : { ...company };
-  const paymentSettings = buildPaymentSettingsFromAccounts(plain.paymentMethods, accounts);
-  const enabledPaymentMethods = buildEnabledPaymentMethods(paymentSettings);
+  const toggles = resolvePaymentToggles(plain.paymentMethods, DEFAULT_DELIVERY_PAYMENT_TOGGLES);
+  const activeAccounts = (accounts || []).filter((a) => a.isActive);
+  const { paymentSettings, enabledPaymentMethods } = buildCustomerPaymentPayload(
+    toggles,
+    activeAccounts,
+    "qrCodeUrl",
+  );
   const servedRegionIds = (plain.servedRegionIds || []).map(String);
 
   return {
