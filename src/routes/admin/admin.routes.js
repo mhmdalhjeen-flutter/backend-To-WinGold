@@ -28,6 +28,7 @@ const usersAdmin = require("../../controllers/admin/users-admin.controller");
 const deliveryCompanyAdmin = require("../../controllers/admin/delivery-company-admin.controller");
 const deliveryProofAdmin = require("../../controllers/admin/delivery-proof-admin.controller");
 const auditController = require("../../controllers/admin/audit.controller");
+const adminSensitiveController = require("../../controllers/admin-sensitive.controller");
 const adminAuditMiddleware = require("../../middleware/adminAudit.middleware");
 const { requireObjectId } = require("../../utils/inputSecurity.util");
 
@@ -58,6 +59,13 @@ router.use(async (req, res, next) => {
 });
 
 router.use(adminAuditMiddleware);
+
+// ─── كلمة مرور الصفحات الحساسة (SensitiveGate) ───────────────────────────────
+router.get("/sensitive/status", adminSensitiveController.getStatus);
+router.post("/sensitive/setup", adminSensitiveController.setupPassword);
+router.post("/sensitive/verify", adminSensitiveController.verifyPassword);
+router.post("/sensitive/change", adminSensitiveController.changePassword);
+router.post("/sensitive/revoke", adminSensitiveController.revokeSensitiveSession);
 
 // ─── سجل التدقيق والأمان ─────────────────────────────────────────────────────
 router.get("/audit/activity", auditController.getActivityLogs);
