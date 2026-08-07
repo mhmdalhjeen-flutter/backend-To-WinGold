@@ -118,6 +118,8 @@ const orderSchema = new mongoose.Schema({
     }],
     requestedAt: { type: Date },
     resolvedAt: { type: Date },
+    /** Sum of unavailable item subtotals (items_unavailable only) */
+    availableReplacementAmount: { type: Number },
   },
 
   /** Full change log for invoice / tracking */
@@ -137,6 +139,15 @@ const orderSchema = new mongoose.Schema({
     transferInformation: { type: transferInfoSchema, default: () => ({}) },
     paidAt: { type: Date },
   },
+  paymentTransactions: [{
+    type: { type: String, enum: ['original', 'difference'], default: 'difference' },
+    amount: Number,
+    method: String,
+    proof: String,
+    transferInformation: transferInfoSchema,
+    paidAt: Date,
+    note: String,
+  }],
 }, { timestamps: true });
 
 orderSchema.index({ store: 1, status: 1, createdAt: -1 });

@@ -789,6 +789,42 @@ async function syncOrderInSessions(orderId) {
   return formatted;
 }
 
+/**
+ * Refresh store-stop line items and notes after order content changes
+ * (modification resolve: replace, remove, change_delivery).
+ */
+async function syncOrderContentsInSessions(orderId) {
+  const oid = requireObjectId(orderId, "orderId");
+  const order = await Order.findById(oid).select("deliveryGroup").lean();
+  if (!order?.deliveryGroup) {
+    return;
+  }
+
+  const doc = await DeliverySession.findById(order.deliveryGroup);
+  if (!doc) {
+    safeLog("warn", "delivery_content_sync_missing_session", {
+      orderId: String(oid),
+      deliveryGroup: String(order.deliveryGroup),
+    });
+    return;
+  }
+
+  const previousStatus = normalizeSessionStatus(doc.status);
+  if (TERMINAL_SESSION_STATUSES.has(previousStatus)) return;
+
+  await refreshStoreStopsFromOrders(doc);
+  doc.markModified("storeStops");
+  await doc.save();
+
+  safeLog("info", "delivery_content_sync_ok", {
+    orderId: String(oid),
+    sessionId: String(doc._id),
+  });
+
+  const company = await DeliveryCompany.findById(doc.deliveryCompany).select("name phone whatsapp").lean();
+  return formatSessionDetails(doc, company);
+}
+
 async function assertCompanyUser(user) {
   if (!user?.deliveryCompanyId) {
     const err = new Error("حساب الشركة غير مربوط بشركة توصيل");
@@ -1141,6 +1177,7 @@ module.exports = {
   listSessionsForCustomer,
   calculateSessionFee,
   syncOrderInSessions,
+  syncOrderContentsInSessions,
   syncAfterStoreHandover,
   cancelSession,
   refreshStoreStopsFromOrders,

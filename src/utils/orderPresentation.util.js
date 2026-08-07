@@ -169,6 +169,16 @@ function mapOrderItem(item) {
   };
 }
 
+function computeTotalPaid(plain) {
+  const original = plain.originalTotal != null
+    ? plain.originalTotal
+    : (plain.totalAmount ?? plain.total ?? 0);
+  const differenceSum = (plain.paymentTransactions || [])
+    .filter((t) => t.type === 'difference')
+    .reduce((sum, t) => sum + (Number(t.amount) || 0), 0);
+  return Math.round((original + differenceSum) * 100) / 100;
+}
+
 function formatOrderResponse(order) {
   if (!order) return null;
 
@@ -222,6 +232,8 @@ function formatOrderResponse(order) {
     originalTotal: plain.originalTotal,
     additionalPaymentAmount: plain.additionalPaymentAmount || 0,
     additionalPayment: plain.additionalPayment || null,
+    paymentTransactions: plain.paymentTransactions || [],
+    totalPaid: computeTotalPaid(plain),
   };
 }
 

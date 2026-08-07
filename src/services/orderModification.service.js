@@ -11,6 +11,7 @@ const {
 const { assertNoMongoOperators, requireObjectId, cleanString } = require("../utils/inputSecurity.util");
 const { canTransition } = require("../utils/orderStatus.util");
 const { formatOrderResponse } = require("../utils/orderPresentation.util");
+const { syncOrderContentsInSessions } = require("./deliverySession.service");
 
 const MODIFICATION_REASONS = {
   AREA_TOO_FAR: "area_too_far",
@@ -71,6 +72,44 @@ function isDigitalPayment(method) {
 function getOrderPaidAmount(order) {
   if (order.originalTotal != null) return roundMoney(order.originalTotal);
   return roundMoney(order.totalAmount ?? order.total ?? 0);
+}
+
+function getDifferenceTransactionsTotal(order) {
+  const txs = Array.isArray(order.paymentTransactions) ? order.paymentTransactions : [];
+  return roundMoney(
+    txs
+      .filter((t) => t.type === "difference")
+      .reduce((sum, t) => sum + (Number(t.amount) || 0), 0)
+  );
+}
+
+function getTotalPaidSoFar(order) {
+  return roundMoney(getOrderPaidAmount(order) + getDifferenceTransactionsTotal(order));
+}
+
+function seedOriginalPaymentTransaction(order) {
+  if (!isDigitalPayment(order.paymentMethod)) return order.paymentTransactions || [];
+  const txs = Array.isArray(order.paymentTransactions) ? [...order.paymentTransactions] : [];
+  if (txs.length > 0) return txs;
+
+  const amount = order.originalTotal != null
+    ? roundMoney(order.originalTotal)
+    : roundMoney(order.totalAmount ?? order.total ?? 0);
+
+  txs.push({
+    type: "original",
+    amount,
+    method: normalizePaymentMethod(order.paymentMethod),
+    proof: order.paymentProof || order.paymentProofImage || "",
+    transferInformation: order.transferInformation || {},
+    paidAt: order.createdAt || new Date(),
+    note: "",
+  });
+  return txs;
+}
+
+function isNearbyStoreDelivery(method) {
+  return normalizeDeliveryMethod(method) === DELIVERY_METHODS.NEARBY_STORE;
 }
 
 async function getStoreForOwner(ownerId) {
@@ -159,6 +198,11 @@ async function requestModification(ownerId, orderId, body = {}) {
   let unavailableItems = [];
 
   if (reason === MODIFICATION_REASONS.AREA_TOO_FAR) {
+    if (!isNearbyStoreDelivery(order.deliveryMethod)) {
+      const err = new Error("سبب «المنطقة بعيدة» مسموح فقط لطلبات التوصيل من متجر قريب");
+      err.status = 400;
+      throw err;
+    }
     message = AREA_TOO_FAR_MESSAGE;
   } else {
     const indexes = Array.isArray(body.unavailableItemIndexes)
@@ -196,9 +240,17 @@ async function requestModification(ownerId, orderId, body = {}) {
   }
 
   const originalTotal = getOrderPaidAmount(order);
+  const availableReplacementAmount = reason === MODIFICATION_REASONS.ITEMS_UNAVAILABLE
+    ? roundMoney(unavailableItems.reduce((sum, item) => sum + (item.subtotal || 0), 0))
+    : undefined;
 
   order.status = "modification_requested";
-  order.originalTotal = originalTotal;
+  if (order.originalTotal == null) {
+    order.originalTotal = originalTotal;
+  }
+  if (isDigitalPayment(order.paymentMethod)) {
+    order.paymentTransactions = seedOriginalPaymentTransaction(order);
+  }
   order.modificationRequest = {
     reason,
     message,
@@ -206,6 +258,7 @@ async function requestModification(ownerId, orderId, body = {}) {
     unavailableItems,
     requestedAt: new Date(),
     resolvedAt: undefined,
+    ...(availableReplacementAmount != null ? { availableReplacementAmount } : {}),
   };
   order.statusTimeline = pushTimeline(order, "modification_requested", message);
   order.orderChangeHistory = pushChangeHistory(order, {
@@ -428,6 +481,8 @@ async function resolveChangeDelivery(order, store, body) {
 
   await order.save();
 
+  await syncOrderContentsInSessions(order._id).catch(() => {});
+
   await notifyStore(order, store, {
     type: "order_modification_resolved",
     title: "تم تعديل طريقة التوصيل",
@@ -502,6 +557,8 @@ async function resolveRemoveUnavailable(order, store) {
 
   await order.save();
 
+  await syncOrderContentsInSessions(order._id).catch(() => {});
+
   await notifyStore(order, store, {
     type: "order_modification_resolved",
     title: "تم تعديل الطلب",
@@ -542,30 +599,45 @@ async function resolveReplace(order, store, body) {
   const replacementTotal = roundMoney(replacementRaw.reduce((s, i) => s + i._lineTotal, 0));
   const keptTotal = roundMoney(kept.reduce((s, i) => s + itemLineTotal(i), 0));
   const removedTotal = roundMoney(removed.reduce((s, i) => s + itemLineTotal(i), 0));
+  const availableAmount = removedTotal;
   const newOrderTotal = roundMoney(keptTotal + replacementTotal);
-  const originalPaid = getOrderPaidAmount(order);
-  const difference = roundMoney(newOrderTotal - originalPaid);
+  const additionalNeeded = roundMoney(Math.max(0, replacementTotal - availableAmount));
+  const originalTotal = getOrderPaidAmount(order);
+  const totalPaidSoFar = getTotalPaidSoFar(order);
 
   let additionalPayment = null;
-  let additionalPaymentAmount = 0;
+  let additionalPaymentAmount = getDifferenceTransactionsTotal(order);
 
-  if (difference > 0) {
+  if (additionalNeeded > 0) {
     if (isDigitalPayment(order.paymentMethod)) {
       const payment = parseAdditionalPayment(body, order.paymentMethod);
       if (!payment.proof && !payment.transferInformation?.referenceNumber) {
         const err = new Error("يرجى إدخال بيانات دفع الفرق");
         err.status = 400;
         err.requiresDifferencePayment = true;
-        err.differenceAmount = difference;
+        err.differenceAmount = additionalNeeded;
+        err.additionalNeeded = additionalNeeded;
         throw err;
       }
       additionalPayment = payment;
-      additionalPaymentAmount = difference;
+
+      const txs = Array.isArray(order.paymentTransactions) ? [...order.paymentTransactions] : [];
+      txs.push({
+        type: "difference",
+        amount: additionalNeeded,
+        method: payment.method,
+        proof: payment.proof,
+        transferInformation: payment.transferInformation || {},
+        paidAt: payment.paidAt || new Date(),
+        note: "",
+      });
+      order.paymentTransactions = txs;
+      additionalPaymentAmount = getDifferenceTransactionsTotal({ paymentTransactions: txs });
     } else if (isFlexiblePayment(order.paymentMethod)) {
-      // cash / agreement — difference collected later with the order
-      additionalPaymentAmount = difference;
+      // cash / agreement — difference collected later; update invoice totals only
+      additionalPaymentAmount = additionalNeeded;
     } else {
-      additionalPaymentAmount = difference;
+      additionalPaymentAmount = additionalNeeded;
     }
   }
 
@@ -594,8 +666,8 @@ async function resolveReplace(order, store, body) {
   order.statusTimeline = pushTimeline(
     order,
     "pending",
-    difference > 0
-      ? `تم استبدال المنتجات ودفع فرق ${difference} ₪ — بانتظار مراجعة المتجر`
+    additionalNeeded > 0
+      ? `تم استبدال المنتجات ودفع فرق ${additionalNeeded} ₪ — بانتظار مراجعة المتجر`
       : "تم استبدال المنتجات — بانتظار مراجعة المتجر"
   );
   order.orderChangeHistory = pushChangeHistory(order, {
@@ -609,24 +681,26 @@ async function resolveReplace(order, store, body) {
         quantity: i.quantity,
         subtotal: i.subtotal,
       })),
-      originalPaid,
+      originalTotal,
+      availableAmount,
       removedTotal,
       replacementTotal,
       newOrderTotal,
-      difference,
+      additionalNeeded,
       additionalPaymentAmount,
     },
   });
 
-  if (additionalPaymentAmount > 0) {
+  if (additionalNeeded > 0) {
     order.orderChangeHistory = pushChangeHistory(order, {
       type: "difference_paid",
-      note: difference > 0 && additionalPayment
+      note: additionalPayment
         ? "تم تسجيل دفع الفرق"
         : `فرق المبلغ: ${additionalPaymentAmount} ₪`,
       actor: "customer",
       meta: {
-        amount: additionalPaymentAmount,
+        amount: additionalNeeded,
+        cumulativeAdditional: additionalPaymentAmount,
         method: additionalPayment?.method || order.paymentMethod,
         hasProof: Boolean(additionalPayment?.proof),
       },
@@ -635,6 +709,8 @@ async function resolveReplace(order, store, body) {
 
   await order.save();
 
+  await syncOrderContentsInSessions(order._id).catch(() => {});
+
   await notifyStore(order, store, {
     type: "order_modification_resolved",
     title: "فاتورة محدّثة — استبدال منتجات",
@@ -642,7 +718,7 @@ async function resolveReplace(order, store, body) {
       additionalPaymentAmount > 0 ? ` (فرق ${additionalPaymentAmount} ₪)` : ""
     }`.trim(),
     extra: {
-      originalPaid,
+      originalTotal,
       additionalPaymentAmount,
       newOrderTotal,
     },
@@ -652,11 +728,13 @@ async function resolveReplace(order, store, body) {
     message: "تم تحديث الطلب بالبدائل — بانتظار مراجعة المتجر",
     order: formatOrderResponse(order),
     summary: {
-      originalPaid,
+      originalTotal,
+      totalPaidSoFar: getTotalPaidSoFar(order),
       replacementTotal,
+      availableAmount,
       removedTotal,
       newOrderTotal,
-      difference,
+      additionalNeeded,
       additionalPaymentAmount,
     },
   };
@@ -694,18 +772,24 @@ async function previewReplacement(customerId, orderId, body = {}) {
   const replacementTotal = roundMoney(replacementRaw.reduce((s, i) => s + i._lineTotal, 0));
   const keptTotal = roundMoney(kept.reduce((s, i) => s + itemLineTotal(i), 0));
   const removedTotal = roundMoney(removed.reduce((s, i) => s + itemLineTotal(i), 0));
+  const availableAmount = removedTotal;
   const newOrderTotal = roundMoney(keptTotal + replacementTotal);
-  const originalPaid = getOrderPaidAmount(order);
-  const difference = roundMoney(newOrderTotal - originalPaid);
+  const originalTotal = getOrderPaidAmount(order);
+  const totalPaidSoFar = getTotalPaidSoFar(order);
+  const additionalNeeded = roundMoney(Math.max(0, replacementTotal - availableAmount));
+  const remainingAfterReplacement = roundMoney(Math.max(0, availableAmount - replacementTotal));
 
   return {
-    originalPaid,
+    originalTotal,
+    totalPaidSoFar,
     keptTotal,
+    availableAmount,
     removedTotal,
     replacementTotal,
     newOrderTotal,
-    difference,
-    requiresDifferencePayment: difference > 0 && isDigitalPayment(order.paymentMethod),
+    remainingAfterReplacement,
+    additionalNeeded,
+    requiresDifferencePayment: additionalNeeded > 0 && isDigitalPayment(order.paymentMethod),
     paymentMethod: order.paymentMethod,
     isFlexiblePayment: isFlexiblePayment(order.paymentMethod),
     isDigitalPayment: isDigitalPayment(order.paymentMethod),

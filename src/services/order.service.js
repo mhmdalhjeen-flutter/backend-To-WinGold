@@ -18,7 +18,7 @@ const {
 } = require("../utils/orderStatus.util");
 
 const ORDER_LIST_SELECT =
-  "orderNumber verificationCode containerId containerName customer store customerName customerPhone storeName items subtotal total totalAmount currency status customerNotes storeNotes deliveryMethod deliveryAddress deliveryNotes paymentMethod paymentProof paymentProofImage transferInformation transferName transferPhone transferNumber paymentNotes rejectionReason paymentStatus pointsAwarded rewardPointsAwarded consumedCardType cardDeducted deliveryGroup confirmedAt completedAt deleteAfter statusTimeline modificationRequest orderChangeHistory originalTotal additionalPaymentAmount additionalPayment createdAt updatedAt";
+  "orderNumber verificationCode containerId containerName customer store customerName customerPhone storeName items subtotal total totalAmount currency status customerNotes storeNotes deliveryMethod deliveryAddress deliveryNotes paymentMethod paymentProof paymentProofImage transferInformation transferName transferPhone transferNumber paymentNotes rejectionReason paymentStatus pointsAwarded rewardPointsAwarded consumedCardType cardDeducted deliveryGroup confirmedAt completedAt deleteAfter statusTimeline modificationRequest orderChangeHistory originalTotal additionalPaymentAmount additionalPayment paymentTransactions createdAt updatedAt";
 
 const HISTORY_RETENTION_DAYS = 7;
 
