@@ -18,6 +18,7 @@
 
 const ACTIVE_STATUSES = new Set([
   'pending',
+  'modification_requested',
   'store_accepted',
   'ready_for_delivery_pickup',
   'ready_for_driver_pickup',
@@ -37,6 +38,7 @@ const TERMINAL_STATUSES = new Set([
 
 const ALLOWED_STATUSES = [
   'pending',
+  'modification_requested',
   'store_accepted',
   'ready_for_delivery_pickup',
   'ready_for_driver_pickup',
@@ -56,6 +58,12 @@ const ALLOWED_TRANSITIONS = {
     'store_accepted',
     'ready_for_delivery_pickup',
     'confirmed',
+    'modification_requested',
+    'rejected',
+    'cancelled',
+  ]),
+  modification_requested: new Set([
+    'pending',
     'rejected',
     'cancelled',
   ]),
@@ -131,6 +139,7 @@ function isTerminalStatus(status) {
 
 const STATUS_LABELS = {
   pending: 'بانتظار التأكيد',
+  modification_requested: 'يحتاج تعديل من الزبون',
   store_accepted: 'تم قبول المتجر',
   ready_for_delivery_pickup: 'جاهز للتسليم — شركة التوصيل',
   ready_for_driver_pickup: 'جاهز لاستلام السائق',

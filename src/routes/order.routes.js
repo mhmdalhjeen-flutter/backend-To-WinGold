@@ -83,6 +83,12 @@ router.patch("/:id/reject", roleMiddleware.business, marketplaceOrderController.
 
 router.patch("/:id/hand-to-driver", roleMiddleware.business, marketplaceOrderController.handOrderToDriver);
 
+router.post("/:id/request-modification", roleMiddleware.business, marketplaceOrderController.requestModification);
+
+router.post("/:id/resolve-modification", roleMiddleware.customer, marketplaceOrderController.resolveModification);
+
+router.post("/:id/preview-replacement", roleMiddleware.customer, marketplaceOrderController.previewReplacement);
+
 router.patch("/:id/status", roleMiddleware.business, async (req, res) => {
   try {
     assertNoMongoOperators(req.body, "order");

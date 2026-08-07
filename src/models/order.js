@@ -48,6 +48,7 @@ const orderSchema = new mongoose.Schema({
     type: String,
     enum: [
       'pending',
+      'modification_requested',
       'store_accepted',
       'ready_for_delivery_pickup',
       'ready_for_driver_pickup',
@@ -95,6 +96,47 @@ const orderSchema = new mongoose.Schema({
   completedAt: { type: Date },
   deleteAfter: { type: Date },
   statusTimeline: [statusTimelineSchema],
+
+  /** Store requested customer to modify the order */
+  modificationRequest: {
+    reason: {
+      type: String,
+      enum: ['area_too_far', 'items_unavailable', ''],
+      default: '',
+    },
+    message: { type: String, default: '' },
+    unavailableItemIndexes: [{ type: Number }],
+    unavailableItems: [{
+      index: { type: Number },
+      item: { type: mongoose.Schema.Types.ObjectId },
+      itemType: { type: String },
+      name: { type: String },
+      quantity: { type: Number },
+      price: { type: Number },
+      subtotal: { type: Number },
+      image: { type: String, default: '' },
+    }],
+    requestedAt: { type: Date },
+    resolvedAt: { type: Date },
+  },
+
+  /** Full change log for invoice / tracking */
+  orderChangeHistory: [{
+    at: { type: Date, default: Date.now },
+    type: { type: String, required: true },
+    note: { type: String, default: '' },
+    actor: { type: String, enum: ['store', 'customer', 'system'], default: 'system' },
+    meta: { type: mongoose.Schema.Types.Mixed, default: null },
+  }],
+
+  originalTotal: { type: Number },
+  additionalPaymentAmount: { type: Number, default: 0 },
+  additionalPayment: {
+    method: { type: String, default: '' },
+    proof: { type: String, default: '' },
+    transferInformation: { type: transferInfoSchema, default: () => ({}) },
+    paidAt: { type: Date },
+  },
 }, { timestamps: true });
 
 orderSchema.index({ store: 1, status: 1, createdAt: -1 });

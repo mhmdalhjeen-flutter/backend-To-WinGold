@@ -137,3 +137,52 @@ exports.handOrderToDriver = async (req, res) => {
     handleError(res, err);
   }
 };
+
+exports.requestModification = async (req, res) => {
+  try {
+    assertNoMongoOperators(req.body, "modification");
+    const orderId = requireObjectId(req.params.id, "id");
+    const result = await marketplaceOrderService.requestModification(req.user.id, orderId, req.body);
+    await auditService.logSensitiveOperation(req, {
+      action: "طلب تعديل طلب",
+      details: `طلب ${orderId}`,
+      metadata: { orderId: String(orderId), reason: req.body?.reason || "" },
+    });
+    res.json(result);
+  } catch (err) {
+    handleError(res, err);
+  }
+};
+
+exports.resolveModification = async (req, res) => {
+  try {
+    assertNoMongoOperators(req.body, "modification");
+    const orderId = requireObjectId(req.params.id, "id");
+    const result = await marketplaceOrderService.resolveModification(req.user.id, orderId, req.body);
+    await auditService.logSensitiveOperation(req, {
+      action: "حل تعديل طلب",
+      details: `طلب ${orderId}`,
+      metadata: { orderId: String(orderId), action: req.body?.action || "" },
+    });
+    res.json(result);
+  } catch (err) {
+    const status = err.status || 500;
+    const body = { message: err.message || "حدث خطأ في الخادم" };
+    if (err.requiresDifferencePayment) {
+      body.requiresDifferencePayment = true;
+      body.differenceAmount = err.differenceAmount;
+    }
+    return res.status(status).json(body);
+  }
+};
+
+exports.previewReplacement = async (req, res) => {
+  try {
+    assertNoMongoOperators(req.body, "modification");
+    const orderId = requireObjectId(req.params.id, "id");
+    const result = await marketplaceOrderService.previewReplacement(req.user.id, orderId, req.body);
+    res.json(result);
+  } catch (err) {
+    handleError(res, err);
+  }
+};

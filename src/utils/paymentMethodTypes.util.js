@@ -18,7 +18,7 @@ const SIMPLE_PAYMENT_METHODS = [
   {
     id: "seller_agreement",
     settingsKey: "agreementWithStore",
-    labelAr: "الاتفاق مع المتجر",
+    labelAr: "الاتفاق مع البائع",
     requiresAccount: false,
   },
 ];

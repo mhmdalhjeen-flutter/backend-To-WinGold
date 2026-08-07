@@ -74,6 +74,17 @@ test("confirmed alias behaves like store_accepted for outgoing", () => {
   assert.strictEqual(canTransition("confirmed", "delivered_to_driver"), true);
 });
 
+test("modification: pending → modification_requested → pending", () => {
+  assert.strictEqual(canTransition("pending", "modification_requested"), true);
+  assert.strictEqual(canTransition("modification_requested", "pending"), true);
+  assert.strictEqual(canTransition("modification_requested", "cancelled"), true);
+  assert.strictEqual(canTransition("modification_requested", "rejected"), true);
+});
+
+test("modification: store_accepted cannot go to modification_requested", () => {
+  assert.strictEqual(canTransition("store_accepted", "modification_requested"), false);
+});
+
 test("normalizeStatus aliases", () => {
   assert.strictEqual(normalizeStatus("confirmed"), "store_accepted");
   assert.strictEqual(normalizeStatus("delivered"), "delivered_to_customer");

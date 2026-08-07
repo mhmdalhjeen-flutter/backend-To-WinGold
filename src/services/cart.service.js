@@ -1231,4 +1231,5 @@ module.exports = {
   confirmStoreContainer,
   restoreStockForOrderItems,
   restoreItemsToStoreContainer,
+  deductStockForOrderItems,
 };

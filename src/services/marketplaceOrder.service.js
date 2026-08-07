@@ -154,6 +154,21 @@ async function cancelOrder(customerId, orderId) {
   return formatOrderResponse(order);
 }
 
+async function requestModification(ownerId, orderId, body = {}) {
+  const orderModificationService = require("./orderModification.service");
+  return orderModificationService.requestModification(ownerId, orderId, body);
+}
+
+async function resolveModification(customerId, orderId, body = {}) {
+  const orderModificationService = require("./orderModification.service");
+  return orderModificationService.resolveModification(customerId, orderId, body);
+}
+
+async function previewReplacement(customerId, orderId, body = {}) {
+  const orderModificationService = require("./orderModification.service");
+  return orderModificationService.previewReplacement(customerId, orderId, body);
+}
+
 module.exports = {
   createOrder,
   getCustomerOrders,
@@ -165,4 +180,7 @@ module.exports = {
   rejectOrder,
   cancelOrder,
   handOrderToDriver,
+  requestModification,
+  resolveModification,
+  previewReplacement,
 };

@@ -186,6 +186,16 @@ const storeSchema = new mongoose.Schema({
         palPay: { enabled: { type: Boolean, default: true } },
         jawwalPay: { enabled: { type: Boolean, default: true } },
     },
+
+    /**
+     * Store-controlled receiving methods (not delivery-company selection).
+     * freeNearbyDelivery → customer sees "توصيل مجاني | أنا قريب من المتجر"
+     * storePickup → customer sees "استلام الطلب من المتجر"
+     */
+    receivingMethods: {
+        freeNearbyDelivery: { enabled: { type: Boolean, default: true } },
+        storePickup: { enabled: { type: Boolean, default: true } },
+    },
 }, {
     timestamps: true,
 });

@@ -488,7 +488,7 @@ exports.updateMyStore = async (req, res) => {
         const store = await Store.findOne({ owner: req.user.id });
         if (!store) return res.status(404).json({ message: "لا يوجد متجر مرتبط بحسابك" });
 
-        const { logo, coverImage, name, description, phone, whatsapp, address, brandingWelcomeSeen, currencyPreferences } = req.body;
+        const { logo, coverImage, name, description, phone, whatsapp, address, brandingWelcomeSeen, currencyPreferences, receivingMethods } = req.body;
 
         const nameText = cleanString(name, { field: "name", max: 120 });
         if (nameText) store.name = nameText;
@@ -545,6 +545,24 @@ exports.updateMyStore = async (req, res) => {
             }
             if (currencyPreferences.acceptsAllCurrencyTypes !== undefined) {
                 store.currencyPreferences.acceptsAllCurrencyTypes = !!currencyPreferences.acceptsAllCurrencyTypes;
+            }
+        }
+
+        if (receivingMethods !== undefined && typeof receivingMethods === "object") {
+            assertNoMongoOperators(receivingMethods, "receivingMethods");
+            if (!store.receivingMethods) store.receivingMethods = {};
+            if (receivingMethods.freeNearbyDelivery?.enabled !== undefined) {
+                store.receivingMethods.freeNearbyDelivery = {
+                    enabled: Boolean(receivingMethods.freeNearbyDelivery.enabled),
+                };
+            }
+            if (receivingMethods.storePickup?.enabled !== undefined) {
+                store.receivingMethods.storePickup = {
+                    enabled: Boolean(receivingMethods.storePickup.enabled),
+                };
+            }
+            if (typeof store.markModified === "function") {
+                store.markModified("receivingMethods");
             }
         }
 

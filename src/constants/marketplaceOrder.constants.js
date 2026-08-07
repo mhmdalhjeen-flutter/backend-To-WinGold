@@ -43,6 +43,7 @@ const PAYMENT_METHOD_ALIASES = {
  */
 const ORDER_STATUSES = {
   PENDING_REVIEW: 'pending_review',
+  NEEDS_MODIFICATION: 'needs_modification',
   CONFIRMED: 'confirmed',
   REJECTED: 'rejected',
   COMPLETED: 'completed',
@@ -53,6 +54,7 @@ const ORDER_STATUS_VALUES = Object.values(ORDER_STATUSES);
 /** Legacy DB status → canonical API status. */
 const LEGACY_TO_CANONICAL_STATUS = {
   pending: ORDER_STATUSES.PENDING_REVIEW,
+  modification_requested: ORDER_STATUSES.NEEDS_MODIFICATION,
   store_accepted: ORDER_STATUSES.CONFIRMED,
   ready_for_delivery_pickup: ORDER_STATUSES.CONFIRMED,
   ready_for_driver_pickup: ORDER_STATUSES.CONFIRMED,
@@ -70,6 +72,7 @@ const LEGACY_TO_CANONICAL_STATUS = {
 /** Canonical API status → legacy DB status for writes. */
 const CANONICAL_TO_LEGACY_STATUS = {
   [ORDER_STATUSES.PENDING_REVIEW]: 'pending',
+  [ORDER_STATUSES.NEEDS_MODIFICATION]: 'modification_requested',
   [ORDER_STATUSES.CONFIRMED]: 'store_accepted',
   [ORDER_STATUSES.REJECTED]: 'rejected',
   [ORDER_STATUSES.COMPLETED]: 'delivered_to_customer',

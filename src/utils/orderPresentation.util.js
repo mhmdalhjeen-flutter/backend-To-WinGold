@@ -125,6 +125,7 @@ async function enrichSingleOrder(order, options = {}) {
 function getStoreStatusLabel(legacyStatus) {
   const labels = {
     pending: 'بانتظار التأكيد',
+    modification_requested: 'يحتاج تعديل من الزبون',
     store_accepted: 'تم قبول المتجر',
     ready_for_delivery_pickup: 'جاهز للتسليم — شركة التوصيل',
     ready_for_driver_pickup: 'جاهز لاستلام السائق',
@@ -216,6 +217,11 @@ function formatOrderResponse(order) {
     updatedAt: plain.updatedAt,
     customer: plain.customer,
     store: plain.store,
+    modificationRequest: plain.modificationRequest || null,
+    orderChangeHistory: plain.orderChangeHistory || [],
+    originalTotal: plain.originalTotal,
+    additionalPaymentAmount: plain.additionalPaymentAmount || 0,
+    additionalPayment: plain.additionalPayment || null,
   };
 }
 

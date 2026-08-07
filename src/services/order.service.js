@@ -18,7 +18,7 @@ const {
 } = require("../utils/orderStatus.util");
 
 const ORDER_LIST_SELECT =
-  "orderNumber verificationCode containerId containerName customer store customerName customerPhone storeName items subtotal total totalAmount currency status customerNotes storeNotes deliveryMethod deliveryAddress deliveryNotes paymentMethod paymentProof paymentProofImage transferInformation transferName transferPhone transferNumber paymentNotes rejectionReason paymentStatus pointsAwarded rewardPointsAwarded consumedCardType cardDeducted deliveryGroup confirmedAt completedAt deleteAfter statusTimeline createdAt updatedAt";
+  "orderNumber verificationCode containerId containerName customer store customerName customerPhone storeName items subtotal total totalAmount currency status customerNotes storeNotes deliveryMethod deliveryAddress deliveryNotes paymentMethod paymentProof paymentProofImage transferInformation transferName transferPhone transferNumber paymentNotes rejectionReason paymentStatus pointsAwarded rewardPointsAwarded consumedCardType cardDeducted deliveryGroup confirmedAt completedAt deleteAfter statusTimeline modificationRequest orderChangeHistory originalTotal additionalPaymentAmount additionalPayment createdAt updatedAt";
 
 const HISTORY_RETENTION_DAYS = 7;
 
@@ -62,7 +62,7 @@ async function getStoreOrders(ownerId) {
   const orders = await Order.find({
     store: store._id,
     status: {
-      $in: ["pending", "store_accepted", "ready_for_delivery_pickup", "ready_for_driver_pickup", "delivery_handover_complete", "confirmed", "preparing", "delivered_to_driver"],
+      $in: ["pending", "modification_requested", "store_accepted", "ready_for_delivery_pickup", "ready_for_driver_pickup", "delivery_handover_complete", "confirmed", "preparing", "delivered_to_driver"],
     },
   })
     .select(ORDER_LIST_SELECT)
@@ -77,7 +77,7 @@ async function getCustomerActiveOrders(customerId) {
   return Order.find({
     customer: customerId,
     status: {
-      $in: ["pending", "store_accepted", "ready_for_delivery_pickup", "ready_for_driver_pickup", "delivery_handover_complete", "confirmed", "preparing", "delivered_to_driver"],
+      $in: ["pending", "modification_requested", "store_accepted", "ready_for_delivery_pickup", "ready_for_driver_pickup", "delivery_handover_complete", "confirmed", "preparing", "delivered_to_driver"],
     },
   })
     .select(ORDER_LIST_SELECT)
@@ -887,7 +887,7 @@ async function cancelOrderByCustomer(customerId, orderId) {
     session.startTransaction();
 
     const order = await Order.findOneAndUpdate(
-      { _id: orderId, customer: customerId, status: "pending" },
+      { _id: orderId, customer: customerId, status: { $in: ["pending", "modification_requested"] } },
       {
         $set: {
           status: "cancelled",
@@ -926,7 +926,7 @@ async function cancelOrderByCustomer(customerId, orderId) {
 
 async function cancelOrderByCustomerFallback(customerId, orderId) {
   const order = await Order.findOneAndUpdate(
-    { _id: orderId, customer: customerId, status: "pending" },
+    { _id: orderId, customer: customerId, status: { $in: ["pending", "modification_requested"] } },
     { $set: { status: "cancelled" } },
     { new: true }
   );
