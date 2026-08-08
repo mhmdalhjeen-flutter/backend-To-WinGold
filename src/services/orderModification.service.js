@@ -390,12 +390,27 @@ function parseAdditionalPayment(body = {}, orderPaymentMethod) {
 async function resolveModification(customerId, orderId, body = {}) {
   assertNoMongoOperators(body, "modification");
   const action = cleanString(body.action, { field: "action", max: 64 }) || "";
+  const clientOperationId = cleanString(body.clientOperationId, {
+    field: "clientOperationId",
+    max: 80,
+  }) || "";
 
   const order = await Order.findOne({ _id: orderId, customer: customerId });
   if (!order) {
     const err = new Error("الطلب غير موجود");
     err.status = 404;
     throw err;
+  }
+
+  // A modification saved offline may be uploaded more than once. Replaying an
+  // id we already applied returns the resulting order rather than failing on
+  // the status check below or applying the same change twice.
+  if (clientOperationId && (order.appliedModificationOps || []).includes(clientOperationId)) {
+    return {
+      message: "تم تحديث الطلب مسبقاً",
+      replayed: true,
+      order: formatOrderResponse(order),
+    };
   }
 
   if (order.status !== "modification_requested") {
@@ -410,6 +425,13 @@ async function resolveModification(customerId, orderId, body = {}) {
     const err = new Error("المتجر غير موجود");
     err.status = 404;
     throw err;
+  }
+
+  if (clientOperationId) {
+    order.appliedModificationOps = [
+      ...(order.appliedModificationOps || []),
+      clientOperationId,
+    ];
   }
 
   if (action === "change_delivery") {

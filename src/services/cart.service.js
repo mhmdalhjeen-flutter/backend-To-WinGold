@@ -38,6 +38,11 @@ function parseOrderCheckoutBody(body = {}) {
     max: 2000,
   }) || "";
 
+  const clientOperationId = cleanString(body.clientOperationId, {
+    field: "clientOperationId",
+    max: 64,
+  }) || "";
+
   const transferRaw = body.transferInformation || body.transferDetails || {};
   const transferInformation = {
     senderName: cleanString(body.transferName || transferRaw.senderName, { field: "senderName", max: 120 }) || "",
@@ -54,6 +59,7 @@ function parseOrderCheckoutBody(body = {}) {
     paymentMethod,
     paymentProof,
     paymentProofImage: paymentProof,
+    clientOperationId,
     transferInformation,
     transferName: transferInformation.senderName,
     transferPhone: transferInformation.contactNumber,
@@ -636,6 +642,46 @@ async function restoreItemsToStoreContainer(userId, orderItems, storeId, session
 
 const CHECKOUT_DEDUP_MS = 60_000;
 
+/**
+ * Orders already created for a client-generated checkout id.
+ * A retried offline sync replays these instead of creating duplicates.
+ */
+async function findOrdersByClientOperationId(userId, clientOperationId) {
+  if (!clientOperationId) return [];
+  return Order.find({ customer: userId, clientOperationId })
+    .sort({ createdAt: 1 })
+    .lean();
+}
+
+function toConfirmResponse(order) {
+  return {
+    message: "تم إرسال طلبك — بانتظار تأكيد صاحب المحل",
+    verificationCode: order.verificationCode,
+    order: {
+      id: order._id,
+      orderNumber: order.orderNumber,
+      verificationCode: order.verificationCode,
+      store: order.store,
+      total: order.total,
+      status: order.status,
+    },
+  };
+}
+
+function toCheckoutResponse(orders) {
+  return {
+    ordersCount: orders.length,
+    orders: orders.map((o) => ({
+      id: o._id,
+      store: o.store,
+      total: o.total,
+      status: o.status,
+      orderNumber: o.orderNumber,
+      verificationCode: o.verificationCode,
+    })),
+  };
+}
+
 async function assertNoRecentDuplicateOrders(userId, orderPayloads, session) {
   if (!orderPayloads.length) return;
   const since = new Date(Date.now() - CHECKOUT_DEDUP_MS);
@@ -727,7 +773,11 @@ async function buildOrdersFromCartItems(
       total: Math.round(storeTotal * 100) / 100,
     };
   });
-  await assertNoRecentDuplicateOrders(userId, orderPayloads, session);
+  // A client operation id is an exact duplicate guarantee, so the
+  // total-based heuristic (which can reject a genuine repeat order) is skipped.
+  if (!extraOrderFields.clientOperationId) {
+    await assertNoRecentDuplicateOrders(userId, orderPayloads, session);
+  }
 
   let stockDeductions = [];
   try {
@@ -771,6 +821,9 @@ async function buildOrdersFromCartItems(
             ? extraOrderFields.orderNumber
             : generateOrderNumber(),
         verificationCode,
+        ...(extraOrderFields.clientOperationId
+          ? { clientOperationId: extraOrderFields.clientOperationId }
+          : {}),
         containerId: extraOrderFields.containerId || "",
         containerName: extraOrderFields.containerName || storeNameById[storeId] || "",
         customerNotes: extraOrderFields.customerNotes || "",
@@ -804,7 +857,7 @@ async function buildOrdersFromCartItems(
   }
 }
 
-async function checkoutCore(userId, session, userRole = "customer") {
+async function checkoutCore(userId, session, userRole = "customer", clientOperationId = "") {
   let cartQuery = Cart.findOne({ user: userId });
   if (session) cartQuery = cartQuery.session(session);
   const cart = await cartQuery;
@@ -835,18 +888,10 @@ async function checkoutCore(userId, session, userRole = "customer") {
   await cart.save(session ? { session } : {});
 
   try {
-    const orders = await buildOrdersFromCartItems(userId, snapshot, session, userRole);
-    return {
-      ordersCount: orders.length,
-      orders: orders.map((o) => ({
-        id: o._id,
-        store: o.store,
-        total: o.total,
-        status: o.status,
-        orderNumber: o.orderNumber,
-        verificationCode: o.verificationCode,
-      })),
-    };
+    const orders = await buildOrdersFromCartItems(userId, snapshot, session, userRole, {
+      clientOperationId,
+    });
+    return toCheckoutResponse(orders);
   } catch (err) {
     if (!session) {
       await restoreCartSnapshot(userId, snapshot, null);
@@ -1038,6 +1083,9 @@ async function confirmStoreContainer(userId, storeIdRaw, body = {}, userRole = "
   const storeId = requireObjectId(storeIdRaw, "storeId");
   const checkoutFields = parseOrderCheckoutBody(body);
 
+  const replayed = await findOrdersByClientOperationId(userId, checkoutFields.clientOperationId);
+  if (replayed.length) return toConfirmResponse(replayed[0]);
+
   const session = await mongoose.startSession();
   try {
     session.startTransaction();
@@ -1075,6 +1123,7 @@ async function confirmStoreContainer(userId, storeIdRaw, body = {}, userRole = "
     const orders = await buildOrdersFromCartItems(userId, snapshot, session, userRole, {
       containerId: container._id.toString(),
       containerName,
+      clientOperationId: checkoutFields.clientOperationId,
       customerNotes: checkoutFields.customerNotes || container.customerNotes || "",
       deliveryNotes: checkoutFields.deliveryNotes,
       deliveryMethod: checkoutFields.deliveryMethod,
@@ -1131,6 +1180,9 @@ async function confirmStoreContainerFallback(userId, storeIdRaw, body, userRole)
   const storeId = requireObjectId(storeIdRaw, "storeId");
   const checkoutFields = parseOrderCheckoutBody(body);
 
+  const replayed = await findOrdersByClientOperationId(userId, checkoutFields.clientOperationId);
+  if (replayed.length) return toConfirmResponse(replayed[0]);
+
   let cart = await Cart.findOne({ user: userId });
   if (!cart) {
     const err = new Error("السلة فارغة");
@@ -1156,6 +1208,7 @@ async function confirmStoreContainerFallback(userId, storeIdRaw, body, userRole)
   const orders = await buildOrdersFromCartItems(userId, snapshot, null, userRole, {
     containerId: container._id.toString(),
     containerName: container.storeName || storeDoc?.name || "",
+    clientOperationId: checkoutFields.clientOperationId,
     customerNotes: checkoutFields.customerNotes || container.customerNotes || "",
     deliveryNotes: checkoutFields.deliveryNotes,
     deliveryMethod: checkoutFields.deliveryMethod,
@@ -1192,11 +1245,19 @@ async function confirmStoreContainerFallback(userId, storeIdRaw, body, userRole)
   };
 }
 
-async function checkout(userId, userRole = "customer") {
+async function checkout(userId, userRole = "customer", body = {}) {
+  const clientOperationId = cleanString(body?.clientOperationId, {
+    field: "clientOperationId",
+    max: 64,
+  }) || "";
+
+  const replayed = await findOrdersByClientOperationId(userId, clientOperationId);
+  if (replayed.length) return toCheckoutResponse(replayed);
+
   const session = await mongoose.startSession();
   try {
     session.startTransaction();
-    const result = await checkoutCore(userId, session, userRole);
+    const result = await checkoutCore(userId, session, userRole, clientOperationId);
     await session.commitTransaction();
     invalidateCartCache(userId);
     return result;
@@ -1208,7 +1269,9 @@ async function checkout(userId, userRole = "customer") {
       err.code === 251 ||
       err.code === 263
     ) {
-      const result = await checkoutCore(userId, null, userRole);
+      const retried = await findOrdersByClientOperationId(userId, clientOperationId);
+      if (retried.length) return toCheckoutResponse(retried);
+      const result = await checkoutCore(userId, null, userRole, clientOperationId);
       invalidateCartCache(userId);
       return result;
     }

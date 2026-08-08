@@ -32,6 +32,9 @@ const statusTimelineSchema = new mongoose.Schema({
 const orderSchema = new mongoose.Schema({
   orderNumber: { type: String, index: true, sparse: true },
   verificationCode: { type: String, index: true, unique: true, sparse: true },
+  // Client-generated id for a single checkout attempt. Lets a retried offline
+  // sync replay the original order instead of creating a duplicate.
+  clientOperationId: { type: String, default: undefined },
   containerId: { type: String, default: '' },
   containerName: { type: String, default: '' },
   customer: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
@@ -148,11 +151,24 @@ const orderSchema = new mongoose.Schema({
     paidAt: Date,
     note: String,
   }],
+
+  /**
+   * Client operation ids of modifications already applied to this order.
+   * A modification confirmed offline may be uploaded more than once; replaying
+   * a known id returns the current order instead of applying it twice.
+   */
+  appliedModificationOps: [{ type: String }],
 }, { timestamps: true });
 
 orderSchema.index({ store: 1, status: 1, createdAt: -1 });
 orderSchema.index({ customer: 1, createdAt: -1 });
 orderSchema.index({ customer: 1, store: 1, status: 1, createdAt: -1 });
 orderSchema.index({ deleteAfter: 1 }, { expireAfterSeconds: 0, partialFilterExpression: { deleteAfter: { $type: 'date' } } });
+// Bulk checkout creates one order per store under a single operation id,
+// so uniqueness is per store — a replayed sync can never insert twice.
+orderSchema.index(
+  { customer: 1, clientOperationId: 1, store: 1 },
+  { unique: true, partialFilterExpression: { clientOperationId: { $type: 'string' } } }
+);
 
 module.exports = mongoose.model('Order', orderSchema);

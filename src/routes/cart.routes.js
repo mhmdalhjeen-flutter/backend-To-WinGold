@@ -95,7 +95,7 @@ router.delete("/clear", verifiedMiddleware, async (req, res) => {
 
 router.post("/checkout", verifiedMiddleware, checkoutLimiter, async (req, res) => {
   try {
-    const result = await cartService.checkout(req.user.id, req.user.role);
+    const result = await cartService.checkout(req.user.id, req.user.role, req.body);
     await auditService.logSensitiveOperation(req, {
       action: "إتمام طلب (checkout)",
       details: `${result.ordersCount} طلب(ات) — إجمالي ${result.orders?.length || 0} متجر`,
