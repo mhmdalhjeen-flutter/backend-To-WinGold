@@ -180,11 +180,11 @@ const storeSchema = new mongoose.Schema({
 
     /** Enable/disable payment methods shown to customers */
     paymentMethods: {
-        cashOnDelivery: { enabled: { type: Boolean, default: true } },
-        agreementWithStore: { enabled: { type: Boolean, default: true } },
-        bankPalestine: { enabled: { type: Boolean, default: true } },
-        palPay: { enabled: { type: Boolean, default: true } },
-        jawwalPay: { enabled: { type: Boolean, default: true } },
+        cashOnDelivery: { enabled: { type: Boolean, default: true }, note: { type: String, default: "" } },
+        agreementWithStore: { enabled: { type: Boolean, default: true }, note: { type: String, default: "" } },
+        bankPalestine: { enabled: { type: Boolean, default: true }, note: { type: String, default: "" } },
+        palPay: { enabled: { type: Boolean, default: true }, note: { type: String, default: "" } },
+        jawwalPay: { enabled: { type: Boolean, default: true }, note: { type: String, default: "" } },
     },
 
     /**
@@ -193,8 +193,8 @@ const storeSchema = new mongoose.Schema({
      * storePickup → customer sees "استلام الطلب من المتجر"
      */
     receivingMethods: {
-        freeNearbyDelivery: { enabled: { type: Boolean, default: true } },
-        storePickup: { enabled: { type: Boolean, default: true } },
+        freeNearbyDelivery: { enabled: { type: Boolean, default: true }, note: { type: String, default: "" } },
+        storePickup: { enabled: { type: Boolean, default: true }, note: { type: String, default: "" } },
     },
 }, {
     timestamps: true,

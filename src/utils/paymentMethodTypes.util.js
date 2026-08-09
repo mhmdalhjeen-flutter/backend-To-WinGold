@@ -118,10 +118,11 @@ function resolvePaymentToggles(paymentMethods, defaults = DEFAULT_STORE_PAYMENT_
   const result = {};
   for (const key of TOGGLE_KEYS) {
     const fallback = defaults[key]?.enabled !== false;
-    if (pm[key]?.enabled === undefined) {
-      result[key] = { enabled: fallback };
+    const entry = pm[key] || {};
+    if (entry.enabled === undefined) {
+      result[key] = { enabled: fallback, note: String(entry.note || "").trim() };
     } else {
-      result[key] = { enabled: Boolean(pm[key].enabled) };
+      result[key] = { enabled: Boolean(entry.enabled), note: String(entry.note || "").trim() };
     }
   }
   return result;
@@ -134,14 +135,23 @@ function applyPaymentMethodToggles(target, paymentMethods = {}, defaults = DEFAU
   if (!paymentMethods || typeof paymentMethods !== "object") return;
   if (!target.paymentMethods) target.paymentMethods = {};
   for (const key of TOGGLE_KEYS) {
-    if (paymentMethods[key]?.enabled === undefined) continue;
-    target.paymentMethods[key] = { enabled: Boolean(paymentMethods[key].enabled) };
+    const patch = paymentMethods[key];
+    if (!patch || typeof patch !== "object") continue;
+    if (!target.paymentMethods[key]) target.paymentMethods[key] = {};
+    if (patch.enabled !== undefined) {
+      target.paymentMethods[key].enabled = Boolean(patch.enabled);
+    }
+    if (patch.note !== undefined) {
+      target.paymentMethods[key].note = String(patch.note || "").trim().slice(0, 500);
+    }
   }
   // Ensure all keys exist after patch
   const resolved = resolvePaymentToggles(target.paymentMethods, defaults);
   for (const key of TOGGLE_KEYS) {
     if (!target.paymentMethods[key]) {
-      target.paymentMethods[key] = { enabled: resolved[key].enabled };
+      target.paymentMethods[key] = { enabled: resolved[key].enabled, note: resolved[key].note || "" };
+    } else if (target.paymentMethods[key].note === undefined) {
+      target.paymentMethods[key].note = resolved[key].note || "";
     }
   }
   if (typeof target.markModified === "function") {
@@ -164,7 +174,10 @@ function buildCustomerPaymentPayload(toggles, activeAccounts = [], qrField = "ba
   for (const def of SIMPLE_PAYMENT_METHODS) {
     const key = def.settingsKey;
     if (!toggles[key]?.enabled) continue;
-    paymentSettings[key] = { enabled: true };
+    paymentSettings[key] = {
+      enabled: true,
+      note: toggles[key]?.note || "",
+    };
     enabledPaymentMethods.push(def.id);
   }
 
@@ -184,6 +197,7 @@ function buildCustomerPaymentPayload(toggles, activeAccounts = [], qrField = "ba
     const qr = account[qrField] || account.qrCodeUrl || account.barcodeImage || "";
     paymentSettings[key] = {
       enabled: true,
+      note: toggles[key]?.note || "",
       qrCodeUrl: qr,
       accountOwnerName: account.accountName || "",
       accountNumber: account.accountNumber || "",

@@ -551,14 +551,26 @@ exports.updateMyStore = async (req, res) => {
         if (receivingMethods !== undefined && typeof receivingMethods === "object") {
             assertNoMongoOperators(receivingMethods, "receivingMethods");
             if (!store.receivingMethods) store.receivingMethods = {};
-            if (receivingMethods.freeNearbyDelivery?.enabled !== undefined) {
+            if (receivingMethods.freeNearbyDelivery !== undefined) {
+                const prev = store.receivingMethods.freeNearbyDelivery || {};
                 store.receivingMethods.freeNearbyDelivery = {
-                    enabled: Boolean(receivingMethods.freeNearbyDelivery.enabled),
+                    enabled: receivingMethods.freeNearbyDelivery.enabled !== undefined
+                        ? Boolean(receivingMethods.freeNearbyDelivery.enabled)
+                        : prev.enabled !== false,
+                    note: receivingMethods.freeNearbyDelivery.note !== undefined
+                        ? cleanString(receivingMethods.freeNearbyDelivery.note, { field: "note", max: 500 })
+                        : (prev.note || ""),
                 };
             }
-            if (receivingMethods.storePickup?.enabled !== undefined) {
+            if (receivingMethods.storePickup !== undefined) {
+                const prev = store.receivingMethods.storePickup || {};
                 store.receivingMethods.storePickup = {
-                    enabled: Boolean(receivingMethods.storePickup.enabled),
+                    enabled: receivingMethods.storePickup.enabled !== undefined
+                        ? Boolean(receivingMethods.storePickup.enabled)
+                        : prev.enabled !== false,
+                    note: receivingMethods.storePickup.note !== undefined
+                        ? cleanString(receivingMethods.storePickup.note, { field: "note", max: 500 })
+                        : (prev.note || ""),
                 };
             }
             if (typeof store.markModified === "function") {
