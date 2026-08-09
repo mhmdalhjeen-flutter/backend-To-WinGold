@@ -545,7 +545,7 @@ async function resolveChangeDelivery(order, store, body, clientOperationId = "")
   };
 }
 
-async function resolveRemoveUnavailable(order, store, _body, clientOperationId = "") {
+async function resolveRemoveUnavailable(order, store, body = {}, clientOperationId = "") {
   const mod = order.modificationRequest || {};
   if (mod.reason !== MODIFICATION_REASONS.ITEMS_UNAVAILABLE) {
     const err = new Error("لا توجد منتجات غير متوفرة لإزالتها");
@@ -559,20 +559,41 @@ async function resolveRemoveUnavailable(order, store, _body, clientOperationId =
     throw err;
   }
 
-  const indexes = new Set(
+  const unavailableIndexes = new Set(
     (mod.unavailableItemIndexes || []).map((n) => Number(n)).filter((n) => Number.isInteger(n))
   );
-  if (!indexes.size) {
+  if (!unavailableIndexes.size) {
     const err = new Error("لا توجد منتجات محددة للإزالة");
     err.status = 400;
     throw err;
   }
 
+  const rawRequested = body.itemIndexes ?? body.itemIndex ?? body.unavailableItemIndexes;
+  let indexesToRemove;
+  if (rawRequested != null) {
+    const list = Array.isArray(rawRequested) ? rawRequested : [rawRequested];
+    indexesToRemove = new Set(
+      list.map((n) => Number(n)).filter((n) => unavailableIndexes.has(n))
+    );
+    if (!indexesToRemove.size) {
+      const err = new Error("المنتج المحدد غير متاح للإزالة");
+      err.status = 400;
+      throw err;
+    }
+  } else {
+    indexesToRemove = new Set(unavailableIndexes);
+  }
+
   const removed = [];
   const kept = [];
+  const indexMap = new Map();
   order.items.forEach((item, idx) => {
-    if (indexes.has(idx)) removed.push(item);
-    else kept.push(item);
+    if (indexesToRemove.has(idx)) {
+      removed.push(item);
+      return;
+    }
+    indexMap.set(idx, kept.length);
+    kept.push(item);
   });
 
   if (!kept.length) {
@@ -584,24 +605,67 @@ async function resolveRemoveUnavailable(order, store, _body, clientOperationId =
   await cartService.restoreStockForOrderItems(removed, null);
 
   const newTotal = roundMoney(kept.reduce((sum, item) => sum + itemLineTotal(item), 0));
+  const remainingUnavailableIndexes = [...unavailableIndexes]
+    .filter((idx) => !indexesToRemove.has(idx))
+    .map((idx) => indexMap.get(idx))
+    .filter((idx) => Number.isInteger(idx));
+
+  const remainingUnavailableItems = remainingUnavailableIndexes.map((idx) => {
+    const item = kept[idx];
+    return {
+      index: idx,
+      name: item.name || item.productName,
+      productName: item.productName || item.name,
+      image: item.image || item.productImage || "",
+      productImage: item.productImage || item.image || "",
+      quantity: item.quantity,
+      price: item.price,
+      subtotal: itemLineTotal(item),
+      item: item.item,
+    };
+  });
+
+  const remainingReplacementAmount = roundMoney(
+    remainingUnavailableItems.reduce((sum, item) => sum + (item.subtotal || 0), 0)
+  );
+
+  const allResolved = remainingUnavailableIndexes.length === 0;
+  const modBase = mod.toObject?.() || mod;
 
   order.items = kept;
   order.subtotal = newTotal;
   order.total = newTotal;
   order.totalAmount = newTotal;
-  order.status = "pending";
+  order.status = allResolved ? "pending" : "modification_requested";
   order.modificationRequest = {
-    ...mod.toObject?.() || mod,
-    resolvedAt: new Date(),
+    ...modBase,
+    unavailableItemIndexes: remainingUnavailableIndexes,
+    unavailableItems: remainingUnavailableItems,
+    availableReplacementAmount: remainingReplacementAmount,
+    ...(allResolved ? { resolvedAt: new Date() } : {}),
   };
-  order.statusTimeline = pushTimeline(order, "pending", "أزال الزبون المنتجات غير المتوفرة");
+
+  const historyNote = allResolved
+    ? "تمت إزالة المنتجات غير المتوفرة"
+    : `تم إلغاء ${removed.length} منتج غير متوفر`;
+
+  order.statusTimeline = pushTimeline(
+    order,
+    allResolved ? "pending" : "modification_requested",
+    allResolved ? "أزال الزبون المنتجات غير المتوفرة" : "أزال الزبون منتجاً غير متوفر",
+  );
   order.orderChangeHistory = pushChangeHistory(order, {
-    type: "items_removed",
-    note: "تمت إزالة المنتجات غير المتوفرة",
+    type: allResolved ? "items_removed" : "item_removed",
+    note: historyNote,
     actor: "customer",
     meta: {
-      removed: removed.map((i) => ({ name: i.name, quantity: i.quantity, subtotal: itemLineTotal(i) })),
+      removed: removed.map((i) => ({
+        name: i.name,
+        quantity: i.quantity,
+        subtotal: itemLineTotal(i),
+      })),
       newTotal,
+      remainingUnavailable: remainingUnavailableIndexes.length,
     },
   });
 
@@ -610,14 +674,19 @@ async function resolveRemoveUnavailable(order, store, _body, clientOperationId =
 
   await syncOrderContentsInSessions(order._id).catch(() => {});
 
-  await notifyStore(order, store, {
-    type: "order_modification_resolved",
-    title: "تم تعديل الطلب",
-    body: `أزال الزبون المنتجات غير المتوفرة من الطلب ${order.orderNumber || ""}`.trim(),
-  });
+  if (allResolved) {
+    await notifyStore(order, store, {
+      type: "order_modification_resolved",
+      title: "تم تعديل الطلب",
+      body: `أزال الزبون المنتجات غير المتوفرة من الطلب ${order.orderNumber || ""}`.trim(),
+    });
+  }
 
   return {
-    message: "تم تحديث الطلب — بانتظار مراجعة المتجر",
+    message: allResolved
+      ? "تم تحديث الطلب — بانتظار مراجعة المتجر"
+      : "تم إلغاء المنتج — يمكنك متابعة تعديل بقية المنتجات",
+    partial: !allResolved,
     order: formatOrderResponse(order),
   };
 }
