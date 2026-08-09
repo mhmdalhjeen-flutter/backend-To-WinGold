@@ -87,6 +87,38 @@ function getTotalPaidSoFar(order) {
   return roundMoney(getOrderPaidAmount(order) + getDifferenceTransactionsTotal(order));
 }
 
+/** Record a client operation id only when the modification is about to persist. */
+function stampClientOperationId(order, clientOperationId) {
+  if (!clientOperationId) return;
+  order.appliedModificationOps = [
+    ...(order.appliedModificationOps || []),
+    clientOperationId,
+  ];
+}
+
+/**
+ * Payment totals for modification previews/resolves.
+ * When replacements cost less than the unavailable credit, digital orders may
+ * show a surplus (customer paid more than the revised invoice). There is no
+ * automated refund path — surplus is informational for store review only.
+ */
+function buildPaymentSummary(order, newOrderTotal, additionalNeeded = 0) {
+  const originalTotal = getOrderPaidAmount(order);
+  const totalPaidSoFar = getTotalPaidSoFar(order);
+  const paymentSurplus = roundMoney(Math.max(0, totalPaidSoFar - newOrderTotal));
+  const digital = isDigitalPayment(order.paymentMethod);
+
+  return {
+    originalTotal,
+    totalPaidSoFar,
+    newOrderTotal: roundMoney(newOrderTotal),
+    additionalNeeded: roundMoney(additionalNeeded),
+    paymentSurplus,
+    hasPaymentSurplus: paymentSurplus > 0 && digital,
+    refundAvailable: false,
+  };
+}
+
 function seedOriginalPaymentTransaction(order) {
   if (!isDigitalPayment(order.paymentMethod)) return order.paymentTransactions || [];
   const txs = Array.isArray(order.paymentTransactions) ? [...order.paymentTransactions] : [];
@@ -270,6 +302,8 @@ async function requestModification(ownerId, orderId, body = {}) {
 
   await order.save();
 
+  await syncOrderContentsInSessions(order._id).catch(() => {});
+
   await notifyCustomer(order, store, {
     type: "order_modification_requested",
     title: "طلب يحتاج تعديلاً",
@@ -427,21 +461,14 @@ async function resolveModification(customerId, orderId, body = {}) {
     throw err;
   }
 
-  if (clientOperationId) {
-    order.appliedModificationOps = [
-      ...(order.appliedModificationOps || []),
-      clientOperationId,
-    ];
-  }
-
   if (action === "change_delivery") {
-    return resolveChangeDelivery(order, store, body);
+    return resolveChangeDelivery(order, store, body, clientOperationId);
   }
   if (action === "remove_unavailable") {
-    return resolveRemoveUnavailable(order, store, body);
+    return resolveRemoveUnavailable(order, store, body, clientOperationId);
   }
   if (action === "replace") {
-    return resolveReplace(order, store, body);
+    return resolveReplace(order, store, body, clientOperationId);
   }
 
   const err = new Error("إجراء التعديل غير معروف");
@@ -449,7 +476,7 @@ async function resolveModification(customerId, orderId, body = {}) {
   throw err;
 }
 
-async function resolveChangeDelivery(order, store, body) {
+async function resolveChangeDelivery(order, store, body, clientOperationId = "") {
   const mod = order.modificationRequest || {};
   if (mod.reason !== MODIFICATION_REASONS.AREA_TOO_FAR) {
     const err = new Error("تغيير طريقة التوصيل غير مطلوب لهذا الطلب");
@@ -501,6 +528,7 @@ async function resolveChangeDelivery(order, store, body) {
     meta: { deliveryMethod, deliveryAddress: order.deliveryAddress || "" },
   });
 
+  stampClientOperationId(order, clientOperationId);
   await order.save();
 
   await syncOrderContentsInSessions(order._id).catch(() => {});
@@ -517,7 +545,7 @@ async function resolveChangeDelivery(order, store, body) {
   };
 }
 
-async function resolveRemoveUnavailable(order, store) {
+async function resolveRemoveUnavailable(order, store, _body, clientOperationId = "") {
   const mod = order.modificationRequest || {};
   if (mod.reason !== MODIFICATION_REASONS.ITEMS_UNAVAILABLE) {
     const err = new Error("لا توجد منتجات غير متوفرة لإزالتها");
@@ -577,6 +605,7 @@ async function resolveRemoveUnavailable(order, store) {
     },
   });
 
+  stampClientOperationId(order, clientOperationId);
   await order.save();
 
   await syncOrderContentsInSessions(order._id).catch(() => {});
@@ -593,7 +622,7 @@ async function resolveRemoveUnavailable(order, store) {
   };
 }
 
-async function resolveReplace(order, store, body) {
+async function resolveReplace(order, store, body, clientOperationId = "") {
   const mod = order.modificationRequest || {};
   if (mod.reason !== MODIFICATION_REASONS.ITEMS_UNAVAILABLE) {
     const err = new Error("الاستبدال متاح فقط عند عدم توفر منتجات");
@@ -729,6 +758,22 @@ async function resolveReplace(order, store, body) {
     });
   }
 
+  const paymentSummary = buildPaymentSummary(order, newOrderTotal, additionalNeeded);
+  if (paymentSummary.hasPaymentSurplus) {
+    order.orderChangeHistory = pushChangeHistory(order, {
+      type: "payment_surplus",
+      note: `المدفوع (${paymentSummary.totalPaidSoFar} ₪) أعلى من الفاتورة الجديدة (${newOrderTotal} ₪) — لا يوجد استرداد تلقائي`,
+      actor: "system",
+      meta: {
+        totalPaidSoFar: paymentSummary.totalPaidSoFar,
+        newOrderTotal,
+        paymentSurplus: paymentSummary.paymentSurplus,
+        refundAvailable: false,
+      },
+    });
+  }
+
+  stampClientOperationId(order, clientOperationId);
   await order.save();
 
   await syncOrderContentsInSessions(order._id).catch(() => {});
@@ -750,14 +795,13 @@ async function resolveReplace(order, store, body) {
     message: "تم تحديث الطلب بالبدائل — بانتظار مراجعة المتجر",
     order: formatOrderResponse(order),
     summary: {
-      originalTotal,
-      totalPaidSoFar: getTotalPaidSoFar(order),
+      ...paymentSummary,
       replacementTotal,
       availableAmount,
       removedTotal,
-      newOrderTotal,
-      additionalNeeded,
       additionalPaymentAmount,
+      remainingAfterReplacement: roundMoney(Math.max(0, availableAmount - replacementTotal)),
+      requiresDifferencePayment: additionalNeeded > 0 && isDigitalPayment(order.paymentMethod),
     },
   };
 }
@@ -800,17 +844,15 @@ async function previewReplacement(customerId, orderId, body = {}) {
   const totalPaidSoFar = getTotalPaidSoFar(order);
   const additionalNeeded = roundMoney(Math.max(0, replacementTotal - availableAmount));
   const remainingAfterReplacement = roundMoney(Math.max(0, availableAmount - replacementTotal));
+  const paymentSummary = buildPaymentSummary(order, newOrderTotal, additionalNeeded);
 
   return {
-    originalTotal,
-    totalPaidSoFar,
+    ...paymentSummary,
     keptTotal,
     availableAmount,
     removedTotal,
     replacementTotal,
-    newOrderTotal,
     remainingAfterReplacement,
-    additionalNeeded,
     requiresDifferencePayment: additionalNeeded > 0 && isDigitalPayment(order.paymentMethod),
     paymentMethod: order.paymentMethod,
     isFlexiblePayment: isFlexiblePayment(order.paymentMethod),

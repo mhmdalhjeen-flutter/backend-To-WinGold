@@ -97,11 +97,10 @@ async function withOrder(order, fn) {
     assert.strictEqual(result.replayed, true);
   });
 
-  await test("an unknown operation id is recorded so the next replay is caught", async () => {
+  await test("an unknown operation id is not recorded when the modification fails", async () => {
     const order = fakeOrder();
 
     await withOrder(order, async () => {
-      // Store lookup is not stubbed, so the call fails after the id is stamped.
       await modificationService
         .resolveModification("cust-1", "order-1", {
           action: "replace",
@@ -110,7 +109,7 @@ async function withOrder(order, fn) {
         .catch(() => {});
     });
 
-    assert.deepStrictEqual(order.appliedModificationOps, ["cop_new"]);
+    assert.deepStrictEqual(order.appliedModificationOps, []);
   });
 
   await test("a modification without an operation id is left untracked", async () => {

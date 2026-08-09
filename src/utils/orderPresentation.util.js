@@ -1,4 +1,4 @@
-const { toCanonicalStatus } = require('../constants/marketplaceOrder.constants');
+const { toCanonicalStatus, normalizePaymentMethod } = require('../constants/marketplaceOrder.constants');
 const DeliverySession = require('../models/deliverySession');
 const DeliveryCompany = require('../models/deliveryCompany');
 const {
@@ -187,6 +187,11 @@ function formatOrderResponse(order) {
   const items = (plain.items || []).map(mapOrderItem);
   const subtotal = plain.subtotal ?? plain.total ?? 0;
   const totalAmount = plain.totalAmount ?? plain.total ?? 0;
+  const totalPaid = computeTotalPaid(plain);
+  const paymentSurplus = Math.round(Math.max(0, totalPaid - totalAmount) * 100) / 100;
+  const digitalMethods = new Set(['bank', 'palpay', 'jawwal_pay']);
+  const hasPaymentSurplus = paymentSurplus > 0
+    && digitalMethods.has(normalizePaymentMethod(plain.paymentMethod));
 
   return {
     id: plain._id,
@@ -233,7 +238,10 @@ function formatOrderResponse(order) {
     additionalPaymentAmount: plain.additionalPaymentAmount || 0,
     additionalPayment: plain.additionalPayment || null,
     paymentTransactions: plain.paymentTransactions || [],
-    totalPaid: computeTotalPaid(plain),
+    totalPaid,
+    paymentSurplus,
+    hasPaymentSurplus,
+    refundAvailable: false,
   };
 }
 

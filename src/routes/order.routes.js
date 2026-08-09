@@ -35,8 +35,8 @@ function parseHistoryFilters(query) {
 
 router.get("/store/pending-count", roleMiddleware.business, async (req, res) => {
   try {
-    const count = await orderService.getStorePendingCount(req.user.id);
-    res.json({ count });
+    const stats = await orderService.getStorePendingCount(req.user.id);
+    res.json(stats);
   } catch (err) {
     handleServiceError(res, err);
   }

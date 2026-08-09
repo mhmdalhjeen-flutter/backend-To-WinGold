@@ -139,6 +139,7 @@ const STORE_READY_FOR_COLLECTION_STATUSES = new Set([
 
 const STORE_STOP_LABELS = {
   pending: "بانتظار التأكيد",
+  modification_requested: "بانتظار تعديل الزبون",
   store_accepted: "تم قبول المتجر",
   ready_for_delivery_pickup: "جاهز للتسليم — شركة التوصيل",
   ready_for_driver_pickup: "جاهز لاستلام السائق",

@@ -47,8 +47,21 @@ async function restoreOrderItemsToCart(userId, orderItems, storeId, session) {
 
 async function getStorePendingCount(ownerId) {
   const store = await Store.findOne({ owner: ownerId }).select("_id");
-  if (!store) return 0;
-  return Order.countDocuments({ store: store._id, status: "pending" });
+  if (!store) {
+    return { count: 0, pendingReview: 0, awaitingCustomerModification: 0 };
+  }
+
+  const [pendingReview, awaitingCustomerModification] = await Promise.all([
+    Order.countDocuments({ store: store._id, status: "pending" }),
+    Order.countDocuments({ store: store._id, status: "modification_requested" }),
+  ]);
+
+  return {
+    /** Orders awaiting store review (legacy field name). */
+    count: pendingReview,
+    pendingReview,
+    awaitingCustomerModification,
+  };
 }
 
 async function getStoreOrders(ownerId) {
