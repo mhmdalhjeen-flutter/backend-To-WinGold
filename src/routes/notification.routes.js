@@ -11,8 +11,10 @@ router.get("/push/public-key", c.getPushPublicKey);
 
 router.use(authMiddleware);
 
+router.get("/push/status", c.getPushStatus);
 router.post("/push/subscribe", c.subscribePush);
 router.post("/push/unsubscribe", c.unsubscribePush);
+router.post("/push/test", c.testPush);
 
 router.get("/", notificationsListCache, c.getMine);
 router.get("/unread-count", notificationsUnreadCache, c.unreadCount);

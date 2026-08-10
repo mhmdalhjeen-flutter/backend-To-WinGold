@@ -3,6 +3,7 @@ const ReferralBatchBuffer = require("../models/referralBatchBuffer");
 const pushService = require("./push.service");
 const { safeLog } = require("../utils/logSanitize.util");
 const cache = require("../utils/responseCache.util");
+const { resolvePushTargetApp, resolveCustomerPushUrl } = require("../utils/pushTarget.util");
 
 function buildPushPayload(doc) {
   if (!doc) return null;
@@ -10,12 +11,25 @@ function buildPushPayload(doc) {
     doc.data && typeof doc.data === "object" && !Array.isArray(doc.data)
       ? doc.data
       : {};
+  const type = doc.type || "general";
+  const targetApp = resolvePushTargetApp(type);
+  const url =
+    targetApp === "store"
+      ? (typeof data.url === "string" && data.url.startsWith("/") ? data.url : "/")
+      : resolveCustomerPushUrl(type, data);
+
   return {
     title: doc.title,
     body: doc.body || "",
+    icon: "/brand/logo-192.webp",
+    url,
+    type,
+    notificationId: String(doc._id),
+    targetApp,
     data: {
-      type: doc.type,
+      type,
       notificationId: String(doc._id),
+      url,
       ...data,
     },
   };
@@ -25,14 +39,22 @@ function buildPushPayload(doc) {
 function dispatchPushAsync(doc) {
   if (!doc?.user) return;
   const payload = buildPushPayload(doc);
-  if (!payload) return;
+  if (!payload || !payload.targetApp) return;
+
   setImmediate(() => {
-    pushService.sendPushToUser(doc.user, payload).catch((err) => {
-      safeLog("warn", "push_dispatch_failed", {
-        message: err.message,
-        userId: String(doc.user),
+    pushService
+      .sendPushToUser(doc.user, payload, {
+        app: payload.targetApp,
+        platform: "web",
+      })
+      .catch((err) => {
+        safeLog("warn", "push_dispatch_failed", {
+          message: err.message,
+          userId: String(doc.user),
+          type: payload.type,
+          app: payload.targetApp,
+        });
       });
-    });
   });
 }
 

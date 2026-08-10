@@ -34,6 +34,7 @@ const isPrimaryWorker = () => {
 const monitorOffers = require("./src/utils/offerMonitor");
 const monitorCompetitions = require("./src/utils/competitionMonitor");
 const monitorBazaar = require("./src/utils/bazaarMonitor");
+const { logVapidStartupStatus } = require("./src/config/vapid");
 
 dotenv.config();
 
@@ -64,6 +65,8 @@ const DEFAULT_DEV_ORIGINS = [5173, 5174, 5175].flatMap((port) => [
 const DEFAULT_PROD_ORIGINS = [
     "https://winzor.netlify.app",
     "https://win-gold-moll.pages.dev",
+    "https://win-gold-shopping.mhmdalhjeen.workers.dev",
+    "https://winzor-customer.mhmdalhjeen.workers.dev",
     "https://win-gold-supplier.pages.dev",
     "https://adminwingold.pages.dev",
     "https://delivery-win-gold.pages.dev",
@@ -263,6 +266,7 @@ const startServer = async () => {
     try {
         await connectDB();
         await connectRedis();
+        logVapidStartupStatus();
 
         if (isPrimaryWorker()) {
             await backfillStorePrefixes();

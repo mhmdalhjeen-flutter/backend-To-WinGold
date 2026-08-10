@@ -20,6 +20,9 @@ const MODIFICATION_REASONS = {
 
 const AREA_TOO_FAR_MESSAGE = "المنطقة بعيدة عن المتجر، يرجى تغيير طريقة التوصيل.";
 
+const DIGITAL_UNDER_BUDGET_MESSAGE =
+  "عند الدفع الإلكتروني يجب أن تكون قيمة البدائل مساوية أو أعلى من المبلغ المتاح للاستبدال — لا يُسترد الفرق تلقائياً.";
+
 const FLEXIBLE_PAYMENT_METHODS = new Set([
   PAYMENT_METHODS.CASH_ON_DELIVERY,
   PAYMENT_METHODS.SELLER_AGREEMENT,
@@ -117,6 +120,24 @@ function buildPaymentSummary(order, newOrderTotal, additionalNeeded = 0) {
     hasPaymentSurplus: paymentSurplus > 0 && digital,
     refundAvailable: false,
   };
+}
+
+function assertElectronicReplacementAllowed(order, replacementTotal, availableAmount) {
+  if (!isDigitalPayment(order.paymentMethod)) return;
+  if (replacementTotal > 0 && replacementTotal < availableAmount) {
+    const err = new Error(DIGITAL_UNDER_BUDGET_MESSAGE);
+    err.status = 400;
+    err.electronicUnderBudgetBlocked = true;
+    throw err;
+  }
+}
+
+function hasDifferencePaymentDetails(payment = {}) {
+  const transfer = payment.transferInformation || {};
+  return Boolean(
+    payment.proof
+    || transfer.referenceNumber
+  );
 }
 
 function seedOriginalPaymentTransaction(order) {
@@ -395,15 +416,29 @@ async function buildReplacementOrderItems(storeId, replacementItemsInput) {
 }
 
 function parseAdditionalPayment(body = {}, orderPaymentMethod) {
+  const nested = body.additionalPayment || {};
+  const nestedTransfer = nested.transferInformation || {};
   const checkout = cartService.parseOrderCheckoutBody({
     ...body,
-    paymentMethod: body.paymentMethod || orderPaymentMethod,
-    paymentProof: body.paymentProof || body.paymentProofImage || body.additionalPayment?.proof,
-    transferInformation: body.transferInformation || body.additionalPayment?.transferInformation,
-    transferName: body.transferName || body.additionalPayment?.transferName,
-    transferPhone: body.transferPhone || body.additionalPayment?.transferPhone,
-    transferNumber: body.transferNumber || body.additionalPayment?.transferNumber,
-    paymentNotes: body.paymentNotes || body.additionalPayment?.paymentNotes,
+    paymentMethod: body.paymentMethod || nested.method || orderPaymentMethod,
+    paymentProof: body.paymentProof
+      || body.paymentProofImage
+      || nested.proof
+      || nested.paymentProof
+      || nested.paymentProofImage,
+    transferInformation: body.transferInformation || nestedTransfer,
+    transferName: body.transferName
+      || nested.transferName
+      || nestedTransfer.senderName,
+    transferPhone: body.transferPhone
+      || nested.transferPhone
+      || nestedTransfer.contactNumber,
+    transferNumber: body.transferNumber
+      || nested.transferNumber
+      || nestedTransfer.referenceNumber,
+    paymentNotes: body.paymentNotes
+      || nested.paymentNotes
+      || nestedTransfer.note,
   });
 
   return {
@@ -725,13 +760,15 @@ async function resolveReplace(order, store, body, clientOperationId = "") {
   const originalTotal = getOrderPaidAmount(order);
   const totalPaidSoFar = getTotalPaidSoFar(order);
 
+  assertElectronicReplacementAllowed(order, replacementTotal, availableAmount);
+
   let additionalPayment = null;
   let additionalPaymentAmount = getDifferenceTransactionsTotal(order);
 
   if (additionalNeeded > 0) {
     if (isDigitalPayment(order.paymentMethod)) {
       const payment = parseAdditionalPayment(body, order.paymentMethod);
-      if (!payment.proof && !payment.transferInformation?.referenceNumber) {
+      if (!hasDifferencePaymentDetails(payment)) {
         const err = new Error("يرجى إدخال بيانات دفع الفرق");
         err.status = 400;
         err.requiresDifferencePayment = true;
@@ -914,6 +951,10 @@ async function previewReplacement(customerId, orderId, body = {}) {
   const additionalNeeded = roundMoney(Math.max(0, replacementTotal - availableAmount));
   const remainingAfterReplacement = roundMoney(Math.max(0, availableAmount - replacementTotal));
   const paymentSummary = buildPaymentSummary(order, newOrderTotal, additionalNeeded);
+  const digital = isDigitalPayment(order.paymentMethod);
+  const electronicUnderBudgetBlocked = digital
+    && replacementTotal > 0
+    && replacementTotal < availableAmount;
 
   return {
     ...paymentSummary,
@@ -922,7 +963,9 @@ async function previewReplacement(customerId, orderId, body = {}) {
     removedTotal,
     replacementTotal,
     remainingAfterReplacement,
-    requiresDifferencePayment: additionalNeeded > 0 && isDigitalPayment(order.paymentMethod),
+    requiresDifferencePayment: additionalNeeded > 0 && digital,
+    electronicUnderBudgetBlocked,
+    minimumReplacementTotal: digital ? availableAmount : 0,
     paymentMethod: order.paymentMethod,
     isFlexiblePayment: isFlexiblePayment(order.paymentMethod),
     isDigitalPayment: isDigitalPayment(order.paymentMethod),
@@ -936,9 +979,13 @@ async function previewReplacement(customerId, orderId, body = {}) {
 module.exports = {
   MODIFICATION_REASONS,
   AREA_TOO_FAR_MESSAGE,
+  DIGITAL_UNDER_BUDGET_MESSAGE,
   requestModification,
   resolveModification,
   previewReplacement,
   isFlexiblePayment,
   isDigitalPayment,
+  parseAdditionalPayment,
+  hasDifferencePaymentDetails,
+  assertElectronicReplacementAllowed,
 };
