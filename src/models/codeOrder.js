@@ -26,4 +26,7 @@ const codeOrderSchema = new mongoose.Schema({
 
 }, { timestamps: true });
 
+codeOrderSchema.index({ store: 1, createdAt: -1 });
+codeOrderSchema.index({ createdAt: -1 });
+
 module.exports = mongoose.model("CodeOrder", codeOrderSchema);

@@ -3,7 +3,10 @@ const ReferralBatchBuffer = require("../models/referralBatchBuffer");
 const pushService = require("./push.service");
 const { safeLog } = require("../utils/logSanitize.util");
 const cache = require("../utils/responseCache.util");
-const { resolvePushTargetApp, resolveCustomerPushUrl } = require("../utils/pushTarget.util");
+const {
+  resolvePushTargetApp,
+  resolvePushUrl,
+} = require("../utils/pushTarget.util");
 
 function buildPushPayload(doc) {
   if (!doc) return null;
@@ -12,11 +15,8 @@ function buildPushPayload(doc) {
       ? doc.data
       : {};
   const type = doc.type || "general";
-  const targetApp = resolvePushTargetApp(type);
-  const url =
-    targetApp === "store"
-      ? (typeof data.url === "string" && data.url.startsWith("/") ? data.url : "/")
-      : resolveCustomerPushUrl(type, data);
+  const targetApp = resolvePushTargetApp(type, data);
+  const url = resolvePushUrl(targetApp, type, data);
 
   return {
     title: doc.title,

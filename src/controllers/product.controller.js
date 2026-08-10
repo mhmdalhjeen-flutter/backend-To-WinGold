@@ -55,7 +55,7 @@ exports.createProduct = async (req, res) => {
             return res.status(400).json({ message: "صورة المنتج مطلوبة" });
         }
 
-        const product = await Product.create({
+    const product = await Product.create({
             name: cleanString(name, { field: "name", max: 120, required: true }),
             description: cleanString(description, { field: "description", max: 1000 }),
             price: numberInRange(price, { field: "price", min: 0, max: 10_000_000, required: true }),
@@ -70,6 +70,9 @@ exports.createProduct = async (req, res) => {
               : null,
             purchaseMode: normalizePurchaseMode(purchaseMode),
         });
+
+        const storeSubscriberNotification = require("../services/storeSubscriberNotification.service");
+        storeSubscriberNotification.notifyStoreNewProduct(store, product).catch(() => {});
 
         res.json({ message: "تم إنشاء المنتج بنجاح", product });
 

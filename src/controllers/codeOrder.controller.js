@@ -10,6 +10,33 @@ const { buildGiftCodesExcelBuffer } = require("../utils/giftCodeExcelExport.util
 const { assertNoMongoOperators, cleanString, intInRange, requireObjectId } = require("../utils/inputSecurity.util");
 const { safeLog } = require("../utils/logSanitize.util");
 
+const DEFAULT_ORDER_LIST_LIMIT = 200;
+const MAX_ORDER_LIST_LIMIT = 500;
+
+function buildOrderListQuery(baseFilter, req) {
+  const filter = { ...baseFilter };
+  const limit = Math.min(
+    intInRange(req.query.limit, { field: "limit", min: 1, max: MAX_ORDER_LIST_LIMIT }) || DEFAULT_ORDER_LIST_LIMIT,
+    MAX_ORDER_LIST_LIMIT
+  );
+  return { filter, limit };
+}
+
+async function buildOrderListQueryAsync(baseFilter, req) {
+  const { filter, limit } = buildOrderListQuery(baseFilter, req);
+
+  if (req.query.cursor) {
+    const cursorDoc = await CodeOrder.findById(requireObjectId(req.query.cursor, "cursor"))
+      .select("createdAt")
+      .lean();
+    if (cursorDoc?.createdAt) {
+      filter.createdAt = { $lt: cursorDoc.createdAt };
+    }
+  }
+
+  return { filter, limit };
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // صاحب المتجر: طلب شراء أكواد (مع اختيار ورقي أو رقمي)
 // ─────────────────────────────────────────────────────────────────────────────
@@ -57,9 +84,13 @@ exports.getMyOrders = async (req, res) => {
         const store = await Store.findOne({ owner: req.user.id, isActive: true });
         if (!store) return res.status(404).json({ message: "لا يوجد متجر" });
 
-        const orders = await CodeOrder.find({ store: store._id })
+        const { filter, limit } = await buildOrderListQueryAsync({ store: store._id }, req);
+
+        const orders = await CodeOrder.find(filter)
             .populate("cardType", "name price points color")
-            .sort({ createdAt: -1 });
+            .sort({ createdAt: -1 })
+            .limit(limit)
+            .lean();
 
         res.json({ orders });
     } catch (err) {
@@ -93,10 +124,14 @@ exports.deleteMyOrder = async (req, res) => {
 // ─────────────────────────────────────────────────────────────────────────────
 exports.getAllOrders = async (req, res) => {
     try {
-        const orders = await CodeOrder.find()
+        const { filter, limit } = await buildOrderListQueryAsync({}, req);
+
+        const orders = await CodeOrder.find(filter)
             .populate("store", "name phone whatsapp address")
             .populate("cardType", "name price points color")
-            .sort({ createdAt: -1 });
+            .sort({ createdAt: -1 })
+            .limit(limit)
+            .lean();
         res.json({ orders });
     } catch (err) {
         res.status(500).json({ message: err.message });

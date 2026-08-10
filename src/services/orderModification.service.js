@@ -205,6 +205,7 @@ async function notifyStore(order, store, { type, title, body, extra = {} }) {
       data: {
         orderId: order._id.toString(),
         storeId: String(store._id || store),
+        pushApp: "store",
         ...extra,
       },
     });

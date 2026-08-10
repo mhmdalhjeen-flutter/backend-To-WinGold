@@ -63,7 +63,10 @@ async function notifyCompanyUsers(companyId, { type, title, body, session }) {
         type,
         title,
         body: body || "",
-        data: sessionData(session),
+        data: {
+          ...sessionData(session),
+          pushApp: "delivery",
+        },
       })),
     );
   } catch (err) {
@@ -94,6 +97,7 @@ async function notifyDriver(driverRef, { type, title, body, session }) {
       data: {
         ...sessionData(session),
         url: `/driver/delivery/${session?._id || session?.id || ""}`,
+        pushApp: "delivery",
       },
     });
   } catch (err) {

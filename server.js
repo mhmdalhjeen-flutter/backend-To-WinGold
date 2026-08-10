@@ -10,6 +10,7 @@ const bcrypt = require("bcryptjs");
 
 const connectDB = require("./src/config/db");
 const { connectRedis } = require("./src/config/redis");
+const { ensureSchemaIndexes } = require("./src/config/syncIndexes");
 const User = require("./src/models/user");
 const { backfillStorePrefixes } = require("./src/utils/storePrefix");
 const { backfillReferralRewardFlags } = require("./src/services/referral.service");
@@ -269,6 +270,7 @@ const startServer = async () => {
         logVapidStartupStatus();
 
         if (isPrimaryWorker()) {
+            await ensureSchemaIndexes();
             await backfillStorePrefixes();
             await backfillReferralRewardFlags();
             await seedAdmin();

@@ -110,7 +110,7 @@ async function sendPushNotification(subscription, payload = {}) {
  * Fan out push to registered Web Push devices for a user.
  * @param {string|ObjectId} userId
  * @param {object} payload
- * @param {{ app?: 'customer'|'store', platform?: 'web' }} [options]
+ * @param {{ app?: 'customer'|'store'|'admin'|'delivery', platform?: 'web' }} [options]
  */
 async function sendPushToUser(userId, payload = {}, options = {}) {
   const empty = { sent: 0, failed: 0, skipped: 0, devices: 0 };
@@ -174,17 +174,20 @@ async function sendPushToUser(userId, payload = {}, options = {}) {
  * Send a test push to the authenticated user's registered devices.
  */
 async function sendTestPush(userId, options = {}) {
-  const app = options.app === "store" ? "store" : "customer";
+  const { VALID_PUSH_APPS, resolvePushUrl } = require("../utils/pushTarget.util");
+  const app = VALID_PUSH_APPS.has(options.app) ? options.app : "customer";
+  const url = resolvePushUrl(app, "push_test", {});
   const payload = {
     title: options.title || "Win Gold — اختبار الإشعارات",
     body: options.body || "إذا ظهر هذا الإشعار، فإن Web Push يعمل على جهازك.",
     icon: "/brand/logo-192.webp",
-    url: app === "store" ? "/" : "/notifications",
+    url,
     type: "push_test",
     notificationId: `test-${Date.now()}`,
     data: {
       type: "push_test",
-      url: app === "store" ? "/" : "/notifications",
+      url,
+      pushApp: app,
     },
   };
 

@@ -247,7 +247,7 @@ exports.getStoreById = async (req, res) => {
         if (req.user?.id) {
             membership = await membershipService.getMembership(req.user.id, store._id);
             const user = await User.findById(req.user.id).select("followedStores role");
-            if (user && ["store", "supplier"].includes(user.role)) {
+            if (user) {
                 isFollowingNetwork = user.followedStores.some(
                     (id) => id.toString() === store._id.toString()
                 );
@@ -263,6 +263,7 @@ exports.getStoreById = async (req, res) => {
             products: sortedProducts.map(stripBase64Image),
             itemCategories,
             isFollowing: isFollowingNetwork || membership?.status === "member" || membership?.status === "pending",
+            isFollowingNetwork,
             membershipStatus: membership?.status || null,
             storeCompetitionsEnabled: competitionsEnabled,
         });

@@ -24,6 +24,8 @@ function stripBase64Logo(store) {
   return resolveStoreMediaFields(store);
 }
 
+const MAX_DISCOVERY_STORES = 2000;
+
 async function applyCategoryIdFilter(query, categoryId) {
   if (!categoryId) return;
   const expandedIds = await expandCategoryIds([categoryId]);
@@ -47,32 +49,52 @@ async function findAlternateRegionForCategory({ categoryId, excludeRegionId, q }
     storeQuery.name = rx;
   }
 
-  const stores = await Store.find(storeQuery).select("regionId subRegionId region").lean();
-  if (!stores.length) return null;
-
   let excludeSet = new Set();
   if (excludeRegionId) {
     const excludeIds = await getDescendantIds(excludeRegionId);
     excludeSet = new Set(excludeIds.map(String));
   }
 
-  const countByRoot = {};
-  for (const s of stores) {
-    const rootId = s.regionId ? String(s.regionId) : null;
-    if (!rootId) continue;
-    if (excludeSet.has(rootId) || (s.subRegionId && excludeSet.has(String(s.subRegionId)))) continue;
-    countByRoot[rootId] = (countByRoot[rootId] || 0) + 1;
-  }
+  const countByRoot = await Store.aggregate([
+    { $match: storeQuery },
+    {
+      $project: {
+        regionId: 1,
+        subRegionId: 1,
+      },
+    },
+    ...(excludeRegionId
+      ? [{
+          $match: {
+            regionId: { $ne: null },
+            $expr: {
+              $and: [
+                { $not: { $in: [{ $toString: "$regionId" }, [...excludeSet]] } },
+                {
+                  $or: [
+                    { $eq: ["$subRegionId", null] },
+                    { $not: { $in: [{ $toString: "$subRegionId" }, [...excludeSet]] } },
+                  ],
+                },
+              ],
+            },
+          },
+        }]
+      : [{ $match: { regionId: { $ne: null } } }]),
+    { $group: { _id: "$regionId", count: { $sum: 1 } } },
+    { $sort: { count: -1 } },
+  ]);
 
-  let entries = Object.entries(countByRoot).sort((a, b) => b[1] - a[1]);
+  let entries = countByRoot.map((row) => [String(row._id), row.count]);
 
-  if (!entries.length) {
-    for (const s of stores) {
-      const rootId = s.regionId ? String(s.regionId) : null;
-      if (!rootId) continue;
-      countByRoot[rootId] = (countByRoot[rootId] || 0) + 1;
-    }
-    entries = Object.entries(countByRoot).sort((a, b) => b[1] - a[1]);
+  if (!entries.length && excludeRegionId) {
+    const fallbackCounts = await Store.aggregate([
+      { $match: storeQuery },
+      { $match: { regionId: { $ne: null } } },
+      { $group: { _id: "$regionId", count: { $sum: 1 } } },
+      { $sort: { count: -1 } },
+    ]);
+    entries = fallbackCounts.map((row) => [String(row._id), row.count]);
   }
 
   if (!entries.length) return null;
@@ -186,6 +208,8 @@ async function browseStores({ userId, region, regionId, category, categoryId, q 
 
   const stores = (await Store.find(query)
     .select("name logo region subRegion category categoryId description customersCount ratingAvg ratingCount totalVisits codesEntered createdAt codePrefix regionId subRegionId whatsapp phone address isVerifiedStore displayPriority")
+    .sort({ displayPriority: -1, createdAt: -1 })
+    .limit(MAX_DISCOVERY_STORES)
     .lean()).map(stripBase64Logo);
 
   const interest = await getCategoryInterestScores(userId);
@@ -307,6 +331,8 @@ async function storesByRegions({ q, regionId, categoryId } = {}) {
     Region.find({ isActive: true, parent: null }).sort({ sortOrder: 1, name: 1 }).lean(),
     Store.find(storeQuery)
       .select("name logo region subRegion category ratingAvg ratingCount regionId subRegionId displayPriority createdAt")
+      .sort({ displayPriority: -1, createdAt: -1 })
+      .limit(MAX_DISCOVERY_STORES)
       .lean()
       .then((rows) => rows.map(stripBase64Logo)),
   ]);
@@ -455,6 +481,8 @@ async function pointsProgramStores({ regionId, q } = {}) {
 
   const stores = (await Store.find(query)
     .select(POINTS_STORE_SELECT)
+    .sort({ displayPriority: -1, createdAt: -1 })
+    .limit(MAX_DISCOVERY_STORES)
     .lean()).map(stripBase64Logo);
 
   const rootRegions = await Region.find({ isActive: true, parent: null })

@@ -3,6 +3,7 @@ const Store = require("../models/store");
 const User = require("../models/user");
 const logActivity = require("../utils/logger");
 const notificationService = require("../services/notification.service");
+const storeSubscriberNotification = require("../services/storeSubscriberNotification.service");
 const { computeOfferFinalPrice, attachPricingToOffer } = require("../services/pricing.service");
 const { normalizeCurrency } = require("../utils/currency.util");
 const { normalizePurchaseMode } = require("../constants/purchaseMode.constants");
@@ -130,6 +131,8 @@ exports.createOffer = async (req, res) => {
             store: store._id,
         });
 
+        storeSubscriberNotification.notifyStoreNewOffer(store, offer).catch(() => {});
+
         res.json({ message: "تم إنشاء العرض بنجاح", offer: attachPricingToOffer(offer) });
     } catch (err) {
         const status = err.message.includes("مطلوب") || err.message.includes("غير") || err.message.includes("تعذّر") ? 400 : 500;
@@ -139,10 +142,15 @@ exports.createOffer = async (req, res) => {
 
 exports.getOffers = async (req, res) => {
     try {
+        const limit = req.query.limit
+            ? intInRange(req.query.limit, { field: "limit", min: 1, max: 200 })
+            : 200;
+
         const offers = await Offer.find({ isActive: true })
             .select(OFFER_LIST_SELECT)
             .populate("store", "name logo region subRegion")
             .sort({ priority: -1, createdAt: -1 })
+            .limit(limit)
             .lean();
 
         res.json({ offers: offers.map(stripBase64Images) });

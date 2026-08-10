@@ -202,6 +202,7 @@ const storeSchema = new mongoose.Schema({
 
 storeSchema.index({ owner: 1 });
 storeSchema.index({ isActive: 1, createdAt: -1 });
+storeSchema.index({ isActive: 1, displayPriority: -1, createdAt: -1 });
 storeSchema.index({ isActive: 1, regionId: 1 });
 storeSchema.index({ isActive: 1, subRegionId: 1 });
 storeSchema.index({ isActive: 1, categoryId: 1 });

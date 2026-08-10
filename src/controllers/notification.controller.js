@@ -5,7 +5,9 @@ const pushService = require("../services/push.service");
 const cache = require("../utils/responseCache.util");
 const { safeLog } = require("../utils/logSanitize.util");
 
-const PUSH_APPS = new Set(["customer", "store"]);
+const { VALID_PUSH_APPS } = require("../utils/pushTarget.util");
+
+const PUSH_APPS = VALID_PUSH_APPS;
 
 function normalizePushSubscription(subscription) {
   if (!subscription || typeof subscription !== "object") return null;
@@ -39,9 +41,11 @@ exports.getPushStatus = async (req, res) => {
   try {
     const vapid = getVapidStatus();
     const deviceFilter = { userId: req.user.id, platform: "web" };
-    const [customerCount, storeCount] = await Promise.all([
+    const [customerCount, storeCount, adminCount, deliveryCount] = await Promise.all([
       PushDevice.countDocuments({ ...deviceFilter, app: "customer" }),
       PushDevice.countDocuments({ ...deviceFilter, app: "store" }),
+      PushDevice.countDocuments({ ...deviceFilter, app: "admin" }),
+      PushDevice.countDocuments({ ...deviceFilter, app: "delivery" }),
     ]);
 
     res.json({
@@ -49,6 +53,8 @@ exports.getPushStatus = async (req, res) => {
       subscriptions: {
         customer: customerCount,
         store: storeCount,
+        admin: adminCount,
+        delivery: deliveryCount,
       },
       browserPermissionHint:
         "Check Notification.permission in the browser — the server cannot read it.",
@@ -63,7 +69,7 @@ exports.subscribePush = async (req, res) => {
     const { app, platform = "web", subscription } = req.body || {};
 
     if (!PUSH_APPS.has(app)) {
-      return res.status(400).json({ message: 'app must be "customer" or "store"' });
+      return res.status(400).json({ message: 'app must be one of: customer, store, admin, delivery' });
     }
     if (platform !== "web") {
       return res.status(400).json({ message: 'platform must be "web"' });
@@ -151,7 +157,8 @@ exports.testPush = async (req, res) => {
       targetUserId = requestedUserId;
     }
 
-    const app = req.body?.app === "store" ? "store" : "customer";
+    const requestedApp = typeof req.body?.app === "string" ? req.body.app.trim() : "";
+    const app = PUSH_APPS.has(requestedApp) ? requestedApp : "customer";
     const vapid = getVapidStatus();
     if (!vapid.configured) {
       return res.status(503).json({

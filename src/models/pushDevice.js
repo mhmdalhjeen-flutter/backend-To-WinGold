@@ -14,7 +14,7 @@ const pushDeviceSchema = new mongoose.Schema(
     },
     app: {
       type: String,
-      enum: ["customer", "store"],
+      enum: ["customer", "store", "admin", "delivery"],
       required: true,
     },
     platform: {
