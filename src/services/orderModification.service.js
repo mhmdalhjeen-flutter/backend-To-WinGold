@@ -16,6 +16,14 @@ const { syncOrderContentsInSessions } = require("./deliverySession.service");
 const MODIFICATION_REASONS = {
   AREA_TOO_FAR: "area_too_far",
   ITEMS_UNAVAILABLE: "items_unavailable",
+  PAYMENT_METHOD_CHANGE_SUGGESTED: "payment_method_change_suggested",
+  PAYMENT_DATA_REVIEW: "payment_data_review",
+};
+
+const PAYMENT_METHOD_DECISIONS = {
+  KEEP_CURRENT: "keep_current",
+  ACCEPT_SUGGESTED: "accept_suggested",
+  CHOOSE_METHOD: "choose_method",
 };
 
 const AREA_TOO_FAR_MESSAGE = "المنطقة بعيدة عن المتجر، يرجى تغيير طريقة التوصيل.";
@@ -134,10 +142,60 @@ function assertElectronicReplacementAllowed(order, replacementTotal, availableAm
 
 function hasDifferencePaymentDetails(payment = {}) {
   const transfer = payment.transferInformation || {};
+  const senderName = String(transfer.senderName || "").trim();
+  const contactNumber = String(transfer.contactNumber || "").trim();
+  const referenceNumber = String(transfer.referenceNumber || "").trim();
   return Boolean(
     payment.proof
-    || transfer.referenceNumber
+    || referenceNumber
+    || (senderName && contactNumber)
   );
+}
+
+function applyPaymentFieldsToOrder(order, payment, { paymentMethod } = {}) {
+  if (paymentMethod) {
+    order.paymentMethod = normalizePaymentMethod(paymentMethod);
+  }
+  if (payment.proof) {
+    order.paymentProof = payment.proof;
+    order.paymentProofImage = payment.proof;
+  }
+  const transfer = payment.transferInformation || {};
+  order.transferInformation = {
+    senderName: transfer.senderName || "",
+    contactNumber: transfer.contactNumber || "",
+    referenceNumber: transfer.referenceNumber || "",
+    note: transfer.note || "",
+  };
+  order.transferName = order.transferInformation.senderName;
+  order.transferPhone = order.transferInformation.contactNumber;
+  order.transferNumber = order.transferInformation.referenceNumber;
+  if (transfer.note) order.paymentNotes = transfer.note;
+  order.paymentStatus = payment.proof ? "pending" : (order.paymentStatus || "unpaid");
+}
+
+function pushPaymentTransaction(order, entry) {
+  const txs = Array.isArray(order.paymentTransactions) ? [...order.paymentTransactions] : [];
+  txs.push(entry);
+  order.paymentTransactions = txs;
+  return txs;
+}
+
+async function assertStorePaymentMethodEnabled(storeId, method) {
+  const paymentMethodService = require("./storePaymentMethod.service");
+  const { enabledPaymentMethods } = await paymentMethodService.buildPaymentSettingsForStore(storeId);
+  const normalized = normalizePaymentMethod(method);
+  const enabled = new Set(
+    (enabledPaymentMethods || []).map((id) => {
+      if (id === "bank_palestine") return PAYMENT_METHODS.BANK;
+      return normalizePaymentMethod(id);
+    })
+  );
+  if (!enabled.has(normalized)) {
+    const err = new Error("طريقة الدفع المقترحة غير مفعّلة لدى المتجر");
+    err.status = 400;
+    throw err;
+  }
 }
 
 function seedOriginalPaymentTransaction(order) {
@@ -247,6 +305,13 @@ async function requestModification(ownerId, orderId, body = {}) {
     throw err;
   }
 
+  if (reason === MODIFICATION_REASONS.PAYMENT_METHOD_CHANGE_SUGGESTED) {
+    return requestPaymentMethodChange(order, store, body);
+  }
+  if (reason === MODIFICATION_REASONS.PAYMENT_DATA_REVIEW) {
+    return requestPaymentDataReview(order, store, body);
+  }
+
   let message = "";
   let unavailableItemIndexes = [];
   let unavailableItems = [];
@@ -335,6 +400,133 @@ async function requestModification(ownerId, orderId, body = {}) {
 
   return {
     message: "تم إرسال طلب التعديل للزبون",
+    order: formatOrderResponse(order),
+  };
+}
+
+async function requestPaymentMethodChange(order, store, body = {}) {
+  if (isDigitalPayment(order.paymentMethod)) {
+    const err = new Error("لا يمكن طلب تغيير طريقة الدفع للطلبات المدفوعة إلكترونياً — استخدم مراجعة بيانات الدفع");
+    err.status = 400;
+    throw err;
+  }
+
+  const currentPaymentMethod = normalizePaymentMethod(order.paymentMethod);
+  const suggestedPaymentMethod = normalizePaymentMethod(
+    cleanString(body.suggestedPaymentMethod, { field: "suggestedPaymentMethod", max: 64 }) || ""
+  );
+  const storeNote = cleanString(body.storeNote || body.note, { field: "storeNote", max: 500 }) || "";
+
+  if (!suggestedPaymentMethod) {
+    const err = new Error("يرجى اختيار طريقة الدفع المقترحة");
+    err.status = 400;
+    throw err;
+  }
+  if (suggestedPaymentMethod === currentPaymentMethod) {
+    const err = new Error("طريقة الدفع المقترحة يجب أن تختلف عن الطريقة الحالية");
+    err.status = 400;
+    throw err;
+  }
+
+  await assertStorePaymentMethodEnabled(store._id, suggestedPaymentMethod);
+
+  const suggestedLabel = suggestedPaymentMethod;
+  const message = storeNote
+    ? `صاحب متجر ${store.name} يقترح تغيير طريقة الدفع إلى ${suggestedLabel}. ${storeNote}`
+    : `صاحب متجر ${store.name} يقترح تغيير طريقة الدفع إلى ${suggestedLabel}.`;
+
+  order.status = "modification_requested";
+  order.modificationRequest = {
+    reason: MODIFICATION_REASONS.PAYMENT_METHOD_CHANGE_SUGGESTED,
+    message,
+    storeNote,
+    currentPaymentMethod,
+    suggestedPaymentMethod,
+    requestedAt: new Date(),
+    resolvedAt: undefined,
+    unavailableItemIndexes: [],
+    unavailableItems: [],
+  };
+  order.statusTimeline = pushTimeline(order, "modification_requested", message);
+  order.orderChangeHistory = pushChangeHistory(order, {
+    type: "payment_method_change_requested",
+    note: message,
+    actor: "store",
+    meta: { currentPaymentMethod, suggestedPaymentMethod, storeNote },
+  });
+
+  await order.save();
+  await syncOrderContentsInSessions(order._id).catch(() => {});
+
+  await notifyCustomer(order, store, {
+    type: "payment_method_change_requested",
+    title: "اقتراح تغيير طريقة الدفع",
+    body: message,
+    extra: {
+      modificationReason: MODIFICATION_REASONS.PAYMENT_METHOD_CHANGE_SUGGESTED,
+      suggestedPaymentMethod,
+      currentPaymentMethod,
+      storeNote,
+    },
+  });
+
+  return {
+    message: "تم إرسال اقتراح تغيير طريقة الدفع للزبون",
+    order: formatOrderResponse(order),
+  };
+}
+
+async function requestPaymentDataReview(order, store, body = {}) {
+  if (!isDigitalPayment(order.paymentMethod)) {
+    const err = new Error("مراجعة بيانات الدفع متاحة فقط للطلبات المدفوعة إلكترونياً");
+    err.status = 400;
+    throw err;
+  }
+
+  const storeNote = cleanString(body.storeNote || body.note, { field: "storeNote", max: 500 }) || "";
+  const message = storeNote
+    ? `صاحب متجر ${store.name} يطلب مراجعة بيانات الدفع. ${storeNote}`
+    : `صاحب متجر ${store.name} يطلب مراجعة بيانات الدفع — يرجى التأكد من بيانات التحويل أو إعادة إرسالها.`;
+
+  if (order.originalTotal == null) {
+    order.originalTotal = getOrderPaidAmount(order);
+  }
+  order.paymentTransactions = seedOriginalPaymentTransaction(order);
+
+  order.status = "modification_requested";
+  order.modificationRequest = {
+    reason: MODIFICATION_REASONS.PAYMENT_DATA_REVIEW,
+    message,
+    storeNote,
+    currentPaymentMethod: normalizePaymentMethod(order.paymentMethod),
+    requestedAt: new Date(),
+    resolvedAt: undefined,
+    unavailableItemIndexes: [],
+    unavailableItems: [],
+  };
+  order.statusTimeline = pushTimeline(order, "modification_requested", message);
+  order.orderChangeHistory = pushChangeHistory(order, {
+    type: "payment_data_review_requested",
+    note: message,
+    actor: "store",
+    meta: { storeNote, paymentMethod: order.paymentMethod },
+  });
+
+  await order.save();
+  await syncOrderContentsInSessions(order._id).catch(() => {});
+
+  await notifyCustomer(order, store, {
+    type: "payment_data_review_requested",
+    title: "مراجعة بيانات الدفع",
+    body: message,
+    extra: {
+      modificationReason: MODIFICATION_REASONS.PAYMENT_DATA_REVIEW,
+      storeNote,
+    },
+  });
+
+  return {
+    message: "تم إرسال طلب مراجعة بيانات الدفع للزبون",
     order: formatOrderResponse(order),
   };
 }
@@ -505,6 +697,12 @@ async function resolveModification(customerId, orderId, body = {}) {
   }
   if (action === "replace") {
     return resolveReplace(order, store, body, clientOperationId);
+  }
+  if (action === "respond_payment_method") {
+    return resolveRespondPaymentMethod(order, store, body, clientOperationId);
+  }
+  if (action === "resubmit_payment_data") {
+    return resolveResubmitPaymentData(order, store, body, clientOperationId);
   }
 
   const err = new Error("إجراء التعديل غير معروف");
@@ -913,6 +1111,187 @@ async function resolveReplace(order, store, body, clientOperationId = "") {
   };
 }
 
+async function resolveRespondPaymentMethod(order, store, body, clientOperationId = "") {
+  const mod = order.modificationRequest || {};
+  if (mod.reason !== MODIFICATION_REASONS.PAYMENT_METHOD_CHANGE_SUGGESTED) {
+    const err = new Error("لا يوجد اقتراح لتغيير طريقة الدفع");
+    err.status = 400;
+    throw err;
+  }
+
+  const decision = cleanString(body.decision, { field: "decision", max: 64 }) || "";
+  const currentMethod = normalizePaymentMethod(mod.currentPaymentMethod || order.paymentMethod);
+  const suggestedMethod = normalizePaymentMethod(mod.suggestedPaymentMethod || "");
+  let nextMethod = currentMethod;
+
+  if (decision === PAYMENT_METHOD_DECISIONS.KEEP_CURRENT) {
+    nextMethod = currentMethod;
+  } else if (decision === PAYMENT_METHOD_DECISIONS.ACCEPT_SUGGESTED) {
+    nextMethod = suggestedMethod;
+  } else if (decision === PAYMENT_METHOD_DECISIONS.CHOOSE_METHOD) {
+    nextMethod = normalizePaymentMethod(
+      cleanString(body.paymentMethod, { field: "paymentMethod", max: 64 }) || ""
+    );
+    if (!nextMethod) {
+      const err = new Error("يرجى اختيار طريقة الدفع");
+      err.status = 400;
+      throw err;
+    }
+    if (nextMethod === currentMethod) {
+      const err = new Error("اختر طريقة مختلفة أو اضغط «الإبقاء على الطريقة الحالية»");
+      err.status = 400;
+      throw err;
+    }
+    await assertStorePaymentMethodEnabled(store._id, nextMethod);
+  } else {
+    const err = new Error("يرجى اختيار رد على اقتراح طريقة الدفع");
+    err.status = 400;
+    throw err;
+  }
+
+  let payment = null;
+  if (isDigitalPayment(nextMethod) && nextMethod !== currentMethod) {
+    payment = parseAdditionalPayment(body, nextMethod);
+    if (!hasDifferencePaymentDetails(payment)) {
+      const err = new Error("يرجى إدخال بيانات التحويل أو إرفاق إيصال الدفع");
+      err.status = 400;
+      throw err;
+    }
+  }
+
+  const previousMethod = order.paymentMethod;
+  order.paymentMethod = nextMethod;
+  if (payment) {
+    applyPaymentFieldsToOrder(order, payment, { paymentMethod: nextMethod });
+    if (isDigitalPayment(nextMethod)) {
+      order.paymentTransactions = seedOriginalPaymentTransaction(order);
+      pushPaymentTransaction(order, {
+        type: "correction",
+        amount: getOrderPaidAmount(order),
+        method: nextMethod,
+        proof: payment.proof,
+        transferInformation: payment.transferInformation || {},
+        paidAt: payment.paidAt || new Date(),
+        note: "بيانات دفع بعد تغيير طريقة الدفع",
+      });
+    }
+  }
+
+  const paymentNotes = cleanString(body.paymentNotes, { field: "paymentNotes", max: 500 }) || "";
+  if (paymentNotes) order.paymentNotes = paymentNotes;
+
+  order.status = "pending";
+  order.modificationRequest = {
+    ...mod.toObject?.() || mod,
+    resolvedAt: new Date(),
+  };
+  order.statusTimeline = pushTimeline(
+    order,
+    "pending",
+    decision === PAYMENT_METHOD_DECISIONS.KEEP_CURRENT
+      ? "أبقى الزبون على طريقة الدفع الحالية"
+      : `غيّر الزبون طريقة الدفع إلى ${nextMethod}`,
+  );
+  order.orderChangeHistory = pushChangeHistory(order, {
+    type: "payment_method_changed",
+    note: decision === PAYMENT_METHOD_DECISIONS.KEEP_CURRENT
+      ? "رفض الزبون اقتراح تغيير طريقة الدفع"
+      : `تم تغيير طريقة الدفع من ${previousMethod} إلى ${nextMethod}`,
+    actor: "customer",
+    meta: {
+      decision,
+      previousMethod,
+      nextMethod,
+      suggestedMethod,
+      storeNote: mod.storeNote || "",
+    },
+  });
+
+  stampClientOperationId(order, clientOperationId);
+  await order.save();
+  await syncOrderContentsInSessions(order._id).catch(() => {});
+
+  await notifyStore(order, store, {
+    type: "order_modification_resolved",
+    title: "رد على اقتراح طريقة الدفع",
+    body: decision === PAYMENT_METHOD_DECISIONS.KEEP_CURRENT
+      ? `أبقى الزبون على طريقة الدفع للطلب ${order.orderNumber || ""}`
+      : `غيّر الزبون طريقة الدفع للطلب ${order.orderNumber || ""}`,
+  });
+
+  return {
+    message: decision === PAYMENT_METHOD_DECISIONS.KEEP_CURRENT
+      ? "تم الإبقاء على طريقة الدفع — بانتظار مراجعة المتجر"
+      : "تم تحديث طريقة الدفع — بانتظار مراجعة المتجر",
+    order: formatOrderResponse(order),
+  };
+}
+
+async function resolveResubmitPaymentData(order, store, body, clientOperationId = "") {
+  const mod = order.modificationRequest || {};
+  if (mod.reason !== MODIFICATION_REASONS.PAYMENT_DATA_REVIEW) {
+    const err = new Error("لا يوجد طلب لمراجعة بيانات الدفع");
+    err.status = 400;
+    throw err;
+  }
+  if (!isDigitalPayment(order.paymentMethod)) {
+    const err = new Error("مراجعة بيانات الدفع غير مطلوبة لهذا الطلب");
+    err.status = 400;
+    throw err;
+  }
+
+  const payment = parseAdditionalPayment(body, order.paymentMethod);
+  if (!hasDifferencePaymentDetails(payment)) {
+    const err = new Error("يرجى إدخال بيانات التحويل أو إرفاق إيصال الدفع");
+    err.status = 400;
+    throw err;
+  }
+
+  order.paymentTransactions = seedOriginalPaymentTransaction(order);
+  applyPaymentFieldsToOrder(order, payment, { paymentMethod: order.paymentMethod });
+  pushPaymentTransaction(order, {
+    type: "correction",
+    amount: getOrderPaidAmount(order),
+    method: normalizePaymentMethod(order.paymentMethod),
+    proof: payment.proof,
+    transferInformation: payment.transferInformation || {},
+    paidAt: payment.paidAt || new Date(),
+    note: mod.storeNote ? `تصحيح بيانات الدفع — ${mod.storeNote}` : "تصحيح بيانات الدفع",
+  });
+
+  order.status = "pending";
+  order.modificationRequest = {
+    ...mod.toObject?.() || mod,
+    resolvedAt: new Date(),
+  };
+  order.statusTimeline = pushTimeline(order, "pending", "أعاد الزبون إرسال بيانات الدفع — بانتظار مراجعة المتجر");
+  order.orderChangeHistory = pushChangeHistory(order, {
+    type: "payment_data_resubmitted",
+    note: "أعاد الزبون إرسال بيانات الدفع",
+    actor: "customer",
+    meta: {
+      hasProof: Boolean(payment.proof),
+      referenceNumber: payment.transferInformation?.referenceNumber || "",
+      storeNote: mod.storeNote || "",
+    },
+  });
+
+  stampClientOperationId(order, clientOperationId);
+  await order.save();
+  await syncOrderContentsInSessions(order._id).catch(() => {});
+
+  await notifyStore(order, store, {
+    type: "order_modification_resolved",
+    title: "بيانات دفع محدّثة",
+    body: `أعاد الزبون إرسال بيانات الدفع للطلب ${order.orderNumber || ""}`,
+  });
+
+  return {
+    message: "تم إرسال بيانات الدفع — بانتظار مراجعة المتجر",
+    order: formatOrderResponse(order),
+  };
+}
+
 /**
  * Preview difference before customer commits payment.
  */
@@ -979,6 +1358,7 @@ async function previewReplacement(customerId, orderId, body = {}) {
 
 module.exports = {
   MODIFICATION_REASONS,
+  PAYMENT_METHOD_DECISIONS,
   AREA_TOO_FAR_MESSAGE,
   DIGITAL_UNDER_BUDGET_MESSAGE,
   requestModification,

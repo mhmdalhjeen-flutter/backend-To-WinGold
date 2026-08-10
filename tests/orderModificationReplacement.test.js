@@ -63,6 +63,17 @@ async function test(name, fn) {
     assert.ok(modificationService.hasDifferencePaymentDetails(payment));
   });
 
+  await test("hasDifferencePaymentDetails accepts manual sender and phone", () => {
+    const payment = modificationService.parseAdditionalPayment(
+      {
+        transferName: "محمد",
+        transferPhone: "0592090288",
+      },
+      "bank",
+    );
+    assert.ok(modificationService.hasDifferencePaymentDetails(payment));
+  });
+
   await test("hasDifferencePaymentDetails rejects empty payment payload", () => {
     const payment = modificationService.parseAdditionalPayment({}, "bank");
     assert.equal(modificationService.hasDifferencePaymentDetails(payment), false);

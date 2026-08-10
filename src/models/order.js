@@ -104,10 +104,19 @@ const orderSchema = new mongoose.Schema({
   modificationRequest: {
     reason: {
       type: String,
-      enum: ['area_too_far', 'items_unavailable', ''],
+      enum: [
+        'area_too_far',
+        'items_unavailable',
+        'payment_method_change_suggested',
+        'payment_data_review',
+        '',
+      ],
       default: '',
     },
     message: { type: String, default: '' },
+    storeNote: { type: String, default: '' },
+    currentPaymentMethod: { type: String, default: '' },
+    suggestedPaymentMethod: { type: String, default: '' },
     unavailableItemIndexes: [{ type: Number }],
     unavailableItems: [{
       index: { type: Number },
@@ -143,7 +152,7 @@ const orderSchema = new mongoose.Schema({
     paidAt: { type: Date },
   },
   paymentTransactions: [{
-    type: { type: String, enum: ['original', 'difference'], default: 'difference' },
+    type: { type: String, enum: ['original', 'difference', 'correction'], default: 'difference' },
     amount: Number,
     method: String,
     proof: String,

@@ -54,6 +54,8 @@ function resolveCustomerPushUrl(type, data = {}) {
     case "order_point_gift":
       return "/orders";
     case "order_modification_requested":
+    case "payment_method_change_requested":
+    case "payment_data_review_requested":
       return orderId ? `/orders/${orderId}/modify` : "/orders";
     case "offer_expired":
     case "offer_expiring":
