@@ -6,7 +6,8 @@ const PromoCode = require("../models/promoCode");
 const storeCardInventoryService = require("../services/storeCardInventory.service");
 const crypto    = require("crypto");
 const { generatePromoCodeString } = require("../utils/promoCode.util");
-const { buildGiftCodesExcelBuffer } = require("../utils/giftCodeExcelExport.util");
+const { buildGiftCodesExcelBuffer, buildGiftCodesExportFilename } = require("../utils/giftCodeExcelExport.util");
+const { CARD_SOURCES } = require("../constants/storeSubscription.constants");
 const { assertNoMongoOperators, cleanString, intInRange, requireObjectId } = require("../utils/inputSecurity.util");
 const { safeLog } = require("../utils/logSanitize.util");
 
@@ -165,6 +166,7 @@ exports.configureOrder = async (req, res) => {
                 rewardEntries: 1,
                 store:         order.store,
                 createdBy:     req.user.id,
+                cardSource:    CARD_SOURCES.INDEPENDENT,
             });
         }
         const created = await PromoCode.insertMany(newCodes);
@@ -181,6 +183,7 @@ exports.configureOrder = async (req, res) => {
                 cardType: order.cardType._id,
                 pointsValue: order.cardType.pointsValue ?? order.cardType.points ?? 1,
                 quantity: order.quantity,
+                source: CARD_SOURCES.INDEPENDENT,
             });
             order.status     = "received";
             order.receivedAt = new Date();
@@ -224,6 +227,7 @@ exports.markAsReceived = async (req, res) => {
             cardType: populated.cardType._id,
             pointsValue: populated.cardType.pointsValue ?? populated.cardType.points ?? 1,
             quantity: order.quantity,
+            source: CARD_SOURCES.INDEPENDENT,
         });
 
         order.status     = "received";
@@ -254,11 +258,14 @@ exports.exportOrderCodes = async (req, res) => {
             return res.status(400).json({ message: "لا توجد أكواد لهذا الطلب" });
 
         const storeName = order.store?.name || "";
-        const codes = order.codes.map((promoCode) => promoCode.code);
+        const codes = order.codes.map((promoCode) => ({
+            code: promoCode.code,
+            source: promoCode.cardSource || CARD_SOURCES.INDEPENDENT,
+        }));
         const xlsxBuffer = await buildGiftCodesExcelBuffer({ codes, storeName });
 
         res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
-        res.setHeader("Content-Disposition", `attachment; filename="gift-codes-${Date.now()}.xlsx"`);
+        res.setHeader("Content-Disposition", `attachment; filename="${buildGiftCodesExportFilename(storeName)}"`);
         res.send(xlsxBuffer);
 
     } catch (err) {
@@ -298,6 +305,7 @@ exports.generateDirectStoreCodes = async (req, res) => {
             rewardEntries: 1,
             store:         safeStoreId,
             createdBy:     req.user.id,
+            cardSource:    CARD_SOURCES.INDEPENDENT,
         });
 
         const digitalPayload = Array.from({ length: digitalQty }, buildCode);
@@ -313,6 +321,7 @@ exports.generateDirectStoreCodes = async (req, res) => {
                 cardType: null,
                 pointsValue: points,
                 quantity: digitalQty,
+                source: CARD_SOURCES.INDEPENDENT,
             });
         }
 
@@ -344,9 +353,10 @@ exports.exportDirectPhysicalCodes = async (req, res) => {
         const storeDoc = await Store.findById(safeStoreId).select("name");
         if (!storeDoc) return res.status(404).json({ message: "المتجر غير موجود" });
 
-        const codeStrings = codes.slice(0, 500).map((c) =>
-            typeof c === "string" ? c : c?.code
-        ).filter(Boolean);
+        const codeStrings = codes.slice(0, 500).map((c) => {
+            if (typeof c === "string") return { code: c, source: CARD_SOURCES.INDEPENDENT };
+            return { code: c?.code, source: c?.cardSource || CARD_SOURCES.INDEPENDENT };
+        }).filter((row) => row.code);
 
         if (!codeStrings.length)
             return res.status(400).json({ message: "لا توجد أكواد صالحة للتصدير" });
@@ -357,7 +367,7 @@ exports.exportDirectPhysicalCodes = async (req, res) => {
         });
 
         res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
-        res.setHeader("Content-Disposition", `attachment; filename="gift-codes-${Date.now()}.xlsx"`);
+        res.setHeader("Content-Disposition", `attachment; filename="${buildGiftCodesExportFilename(storeDoc.name)}"`);
         res.send(xlsxBuffer);
     } catch (err) {
         safeLog("error", "direct_physical_export_failed", { message: err.message, userId: req.user?.id });

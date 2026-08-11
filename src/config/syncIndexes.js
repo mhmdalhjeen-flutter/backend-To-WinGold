@@ -5,6 +5,9 @@ const MODEL_PATHS = [
   "../models/codeOrder",
   "../models/store",
   "../models/user",
+  "../models/storeSubscriptionPeriod",
+  "../models/platformSubscriptionPaymentAccount",
+  "../models/deliveryCompanyBillingPeriod",
 ];
 
 /**

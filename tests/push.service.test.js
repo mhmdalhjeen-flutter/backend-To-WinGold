@@ -8,6 +8,7 @@ const {
   resolveDeliveryPushUrl,
   resolvePushUrl,
   VALID_PUSH_APPS,
+  isCustomerPushAllowed,
 } = require("../src/utils/pushTarget.util");
 
 test("VALID_PUSH_APPS includes all four PWAs", () => {
@@ -21,6 +22,16 @@ test("resolvePushTargetApp routes customer order notifications to customer app",
   assert.equal(resolvePushTargetApp("order_confirmed"), "customer");
   assert.equal(resolvePushTargetApp("order_rejected"), "customer");
   assert.equal(resolvePushTargetApp("delivery_on_the_way"), "customer");
+});
+
+test("isCustomerPushAllowed limits customer Web Push to required events", () => {
+  assert.equal(isCustomerPushAllowed("store_new_product"), true);
+  assert.equal(isCustomerPushAllowed("order_confirmed"), true);
+  assert.equal(isCustomerPushAllowed("delivery_on_the_way"), true);
+  assert.equal(isCustomerPushAllowed("order_delivered"), true);
+  assert.equal(isCustomerPushAllowed("delivery_driver_assigned"), false);
+  assert.equal(isCustomerPushAllowed("referral_batch"), false);
+  assert.equal(isCustomerPushAllowed("order_rejected"), false);
 });
 
 test("resolvePushTargetApp routes store offer notifications to store app", () => {
@@ -93,10 +104,27 @@ test("resolvePushUrl selects app-specific paths", () => {
   );
 });
 
-test("shared delivery_waiting_stores does not cross-route without pushApp", () => {
-  assert.equal(resolvePushTargetApp("delivery_waiting_stores"), "customer");
+test("resolveDeliveryPushUrl builds driver chat deep links", () => {
   assert.equal(
-    resolvePushTargetApp("delivery_waiting_stores", { pushApp: "delivery" }),
-    "delivery",
+    resolveDeliveryPushUrl("chat_message", {
+      senderId: "user1",
+      recipientRole: "delivery_driver",
+    }),
+    "/driver/chat/user1",
+  );
+  assert.equal(
+    resolveDeliveryPushUrl("chat_message", {
+      senderId: "user1",
+      recipientRole: "delivery_company",
+    }),
+    "/chat/user1",
+  );
+});
+
+test("shared delivery_waiting_stores routes to delivery portal by default", () => {
+  assert.equal(resolvePushTargetApp("delivery_waiting_stores"), "delivery");
+  assert.equal(
+    resolvePushTargetApp("delivery_waiting_stores", { pushApp: "customer" }),
+    "customer",
   );
 });

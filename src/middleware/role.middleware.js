@@ -1,4 +1,5 @@
 const auditService = require("../services/audit.service");
+const { CUSTOMER_EXPERIENCE_ROLES } = require("../constants/customerExperience.constants");
 
 const roleMiddleware = (roles) => {
   return (req, res, next) => {
@@ -27,7 +28,8 @@ const roleMiddleware = (roles) => {
 
 /** Pre-built role guards — single source of truth for route authorization */
 roleMiddleware.admin = roleMiddleware(["admin"]);
-roleMiddleware.customer = roleMiddleware(["customer"]);
+roleMiddleware.customer = roleMiddleware(CUSTOMER_EXPERIENCE_ROLES);
+roleMiddleware.customerOnly = roleMiddleware(["customer"]);
 roleMiddleware.store = roleMiddleware(["store"]);
 roleMiddleware.supplier = roleMiddleware(["supplier"]);
 roleMiddleware.business = roleMiddleware(["store", "supplier"]);

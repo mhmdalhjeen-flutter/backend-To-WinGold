@@ -45,7 +45,7 @@ async function notifyStoreOwner(ownerId, { type, title, body, session, orderId, 
   });
 }
 
-async function notifyCompanyUsers(companyId, { type, title, body, session }) {
+async function notifyCompanyUsers(companyId, { type, title, body, session, data: extraData = {} }) {
   if (!companyId || !title) return;
   try {
     const users = await User.find({
@@ -65,6 +65,7 @@ async function notifyCompanyUsers(companyId, { type, title, body, session }) {
         body: body || "",
         data: {
           ...sessionData(session),
+          ...extraData,
           pushApp: "delivery",
         },
       })),
@@ -106,13 +107,6 @@ async function notifyDriver(driverRef, { type, title, body, session }) {
 }
 
 async function onSessionCreated(session) {
-  await notifyCustomer(session.customer, {
-    type: "delivery_session_created",
-    title: "تم إنشاء طلب التوصيل",
-    body: "جاري انتظار موافقة المتاجر على الطلبات المرفقة",
-    session,
-  });
-
   for (const stop of session.storeStops || []) {
     if (!stop.storeOwnerId) continue;
     await notifyStoreOwner(stop.storeOwnerId, {
@@ -135,13 +129,6 @@ async function onSessionCreated(session) {
 }
 
 async function onWaitingForStores(session) {
-  await notifyCustomer(session.customer, {
-    type: "delivery_waiting_stores",
-    title: "بانتظار موافقة المتاجر",
-    body: "سيتم إرسال الطلب لشركة التوصيل بعد موافقة جميع المتاجر",
-    session,
-  });
-
   await notifyCompanyUsers(session.deliveryCompany, {
     type: "delivery_waiting_stores",
     title: "طلب بانتظار تأكيد المتجر",
@@ -151,13 +138,6 @@ async function onWaitingForStores(session) {
 }
 
 async function onReadyForPickup(session) {
-  await notifyCustomer(session.customer, {
-    type: "delivery_ready_for_pickup",
-    title: "تم قبول الطلب",
-    body: "تم قبول طلبك — بانتظار شركة التوصيل",
-    session,
-  });
-
   await notifyCompanyUsers(session.deliveryCompany, {
     type: "delivery_new_request",
     title: "جاهز لتعيين سائق",
@@ -171,9 +151,6 @@ async function onDriverAssigned(session, extra = {}) {
   const driverPhone = extra.driverPhone || session.driverPhone || session.assignedDriver?.phone || "";
   const driverWhatsapp = extra.driverWhatsapp || session.driverWhatsapp || session.assignedDriver?.whatsapp || driverPhone;
   const companyName = session.companyName || "";
-  const body = driverName
-    ? `السائق ${driverName} متوجه إلى المتجر لاستلام طلبك`
-    : "تم تعيين سائق وسيتوجه إلى المتجر قريباً";
 
   const enrichedSession = {
     ...session,
@@ -184,13 +161,6 @@ async function onDriverAssigned(session, extra = {}) {
     companyPhone: session.companyPhone || "",
     companyWhatsapp: session.companyWhatsapp || session.companyPhone || "",
   };
-
-  await notifyCustomer(session.customer, {
-    type: "delivery_driver_assigned",
-    title: "تم تعيين سائق وسيتوجه إلى المتجر قريباً",
-    body: companyName ? `${body} — ${companyName}` : body,
-    session: enrichedSession,
-  });
 
   await notifyDriver(session.assignedDriver || { driverId: extra.driverId }, {
     type: "delivery_assigned_to_you",
@@ -204,9 +174,6 @@ async function onOutForDelivery(session, extra = {}) {
   const driverName = extra.driverName || session.driverName || session.assignedDriver?.name || "";
   const driverPhone = extra.driverPhone || session.driverPhone || session.assignedDriver?.phone || "";
   const driverWhatsapp = extra.driverWhatsapp || session.driverWhatsapp || session.assignedDriver?.whatsapp || driverPhone;
-  const body = driverName
-    ? `السائق ${driverName}${driverPhone ? ` — ${driverPhone}` : ""} في طريقه إليك`
-    : "طلبك في طريقه إليك";
 
   const enrichedSession = {
     ...session,
@@ -217,17 +184,10 @@ async function onOutForDelivery(session, extra = {}) {
 
   await notifyCustomer(session.customer, {
     type: "delivery_on_the_way",
-    title: "الطلب في الطريق",
-    body,
-    session: enrichedSession,
-  });
-
-  await notifyCompanyUsers(session.deliveryCompany, {
-    type: "delivery_out_for_delivery",
-    title: "الطلب قيد التوصيل",
+    title: "تم استلام طلبك للتوصيل",
     body: driverName
-      ? `استلم السائق ${driverName} الطلب من المتجر وهو في الطريق`
-      : "تم استلام الطلب من المتجر — قيد التوصيل",
+      ? `استلم ${driverName} طلبك من المتجر — في طريقه إليك`
+      : "استلمت شركة التوصيل طلبك من المتجر — في الطريق إليك",
     session: enrichedSession,
   });
 
@@ -246,20 +206,13 @@ async function onCompleted(session) {
     body: "تم استلام طلبك بنجاح — شكراً لاستخدامك المنصة",
     session,
   });
-
-  await notifyCompanyUsers(session.deliveryCompany, {
-    type: "delivery_completed",
-    title: "تم إكمال التوصيل",
-    body: `تم استلام الطلب بنجاح${session.customerName ? ` — ${session.customerName}` : ""}`,
-    session,
-  });
 }
 
 async function onRejected(session, reason = "") {
-  await notifyCustomer(session.customer, {
+  await notifyCompanyUsers(session.deliveryCompany, {
     type: "delivery_rejected",
     title: "تم رفض طلب التوصيل",
-    body: reason || "رفضت شركة التوصيل الطلب — يمكنك اختيار شركة أخرى",
+    body: reason || "تم رفض طلب التوصيل",
     session: {
       ...session,
       rejectionReason: reason || session.rejectionReason,
@@ -280,13 +233,6 @@ async function onStoreOrderUpdated(session, stop) {
 }
 
 async function onCancelled(session, reason = "") {
-  await notifyCustomer(session.customer, {
-    type: "delivery_cancelled",
-    title: "تم إلغاء طلب التوصيل",
-    body: reason || "تم إلغاء طلب التوصيل بسبب رفض أحد المتاجر",
-    session,
-  });
-
   await notifyCompanyUsers(session.deliveryCompany, {
     type: "delivery_cancelled",
     title: "تم إلغاء طلب التوصيل",

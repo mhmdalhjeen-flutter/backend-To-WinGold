@@ -64,7 +64,20 @@ const promoCodeSchema = new mongoose.Schema({
     currentUses: {
         type: Number,
         default: 0
-    }
+    },
+
+    /** مصدر الكرت — اشتراك شهري أو شراء مستقل */
+    cardSource: {
+        type: String,
+        enum: ["subscription", "independent"],
+        default: "independent",
+    },
+
+    subscriptionPeriodId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "StoreSubscriptionPeriod",
+        default: null,
+    },
 
 }, { timestamps: true });
 

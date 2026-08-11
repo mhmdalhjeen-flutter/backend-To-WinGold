@@ -6,20 +6,65 @@
 
 const VALID_PUSH_APPS = new Set(["customer", "store", "admin", "delivery"]);
 
+/** Customer Web Push / in-app events — keep in sync with customer PWA allowlist. */
+const CUSTOMER_PUSH_TYPES = new Set([
+  "store_new_product",
+  "store_new_offer",
+  "order_confirmed",
+  "order_modification_requested",
+  "payment_method_change_requested",
+  "payment_data_review_requested",
+  /** Delivery company/driver collected the order from the store. */
+  "delivery_on_the_way",
+  /** Delivery handover completed (driver or store). */
+  "delivery_completed",
+  "order_delivered",
+  "chat_message",
+]);
+
 const STORE_PUSH_TYPES = new Set([
   "offer_expired",
   "offer_expiring",
   "offer_renewed",
   "delivery_order_included",
   "delivery_store_update",
+  "chat_message",
 ]);
 
 /** Delivery portal (company + driver) — only when pushApp is not set on shared types. */
-const DELIVERY_PUSH_TYPES = new Set([
+const DELIVERY_COMPANY_PUSH_TYPES = new Set([
+  "delivery_waiting_stores",
   "delivery_new_request",
+  "delivery_billing_required",
+  "delivery_billing_submitted",
+  "delivery_billing_verified",
+  "delivery_billing_rejected",
+  "delivery_billing_exempted",
+  "chat_message",
+]);
+
+const DELIVERY_DRIVER_PUSH_TYPES = new Set([
   "delivery_assigned_to_you",
   "delivery_out_for_delivery",
+  "chat_message",
 ]);
+
+const DELIVERY_PUSH_TYPES = new Set([
+  ...DELIVERY_COMPANY_PUSH_TYPES,
+  ...DELIVERY_DRIVER_PUSH_TYPES,
+]);
+
+function isCustomerPushAllowed(type) {
+  const normalized = typeof type === "string" ? type.trim() : "";
+  return CUSTOMER_PUSH_TYPES.has(normalized);
+}
+
+function isDeliveryPushAllowed(type, role) {
+  const normalized = typeof type === "string" ? type.trim() : "";
+  if (role === "delivery_company") return DELIVERY_COMPANY_PUSH_TYPES.has(normalized);
+  if (role === "delivery_driver") return DELIVERY_DRIVER_PUSH_TYPES.has(normalized);
+  return DELIVERY_PUSH_TYPES.has(normalized);
+}
 
 function resolvePushTargetApp(type, data = {}) {
   const pushApp = typeof data.pushApp === "string" ? data.pushApp.trim() : "";
@@ -93,6 +138,11 @@ function resolveCustomerPushUrl(type, data = {}) {
     case "delivery_rejected":
     case "delivery_cancelled":
       return deliverySessionId ? `/delivery/confirm?session=${deliverySessionId}` : "/orders";
+    case "chat_message": {
+      const conversationId = data.conversationId != null ? String(data.conversationId) : "";
+      if (conversationId) return `/chat/${conversationId}`;
+      return "/chat";
+    }
     default:
       if (orderId) return `/orders/${orderId}`;
       return "/notifications";
@@ -119,6 +169,11 @@ function resolveStorePushUrl(type, data = {}) {
       return offerId ? `/store/item-details/${offerId}` : "/store/offers";
     case "push_test":
       return "/store/notifications";
+    case "chat_message": {
+      const conversationId = data.conversationId != null ? String(data.conversationId) : "";
+      if (conversationId) return `/store/chat/${conversationId}`;
+      return "/store/chats";
+    }
     default:
       if (orderId) return `/store/orders/${orderId}`;
       return "/store/notifications";
@@ -144,8 +199,24 @@ function resolveDeliveryPushUrl(type, data = {}) {
     case "delivery_rejected":
       if (deliverySessionId) return `/requests/${deliverySessionId}`;
       return "/requests";
+    case "delivery_billing_required":
+    case "delivery_billing_submitted":
+    case "delivery_billing_verified":
+    case "delivery_billing_rejected":
+    case "delivery_billing_exempted":
+      return "/settings/billing";
     case "push_test":
       return "/notifications";
+    case "chat_message": {
+      const senderId = data.senderId != null ? String(data.senderId) : "";
+      const recipientRole = data.recipientRole != null ? String(data.recipientRole) : "";
+      if (recipientRole === "delivery_driver") {
+        if (senderId) return `/driver/chat/${senderId}`;
+        return "/driver";
+      }
+      if (senderId) return `/chat/${senderId}`;
+      return "/chats";
+    }
     default:
       if (deliverySessionId) return `/requests/${deliverySessionId}`;
       return "/notifications";
@@ -183,6 +254,11 @@ function resolvePushUrl(targetApp, type, data = {}) {
 
 module.exports = {
   VALID_PUSH_APPS,
+  CUSTOMER_PUSH_TYPES,
+  isCustomerPushAllowed,
+  isDeliveryPushAllowed,
+  DELIVERY_COMPANY_PUSH_TYPES,
+  DELIVERY_DRIVER_PUSH_TYPES,
   resolvePushTargetApp,
   resolveCustomerPushUrl,
   resolveStorePushUrl,

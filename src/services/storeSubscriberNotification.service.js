@@ -1,41 +1,32 @@
-const StoreMembership = require("../models/storeMembership");
 const User = require("../models/user");
 const Notification = require("../models/notification");
 const notificationService = require("./notification.service");
 const { safeLog } = require("../utils/logSanitize.util");
+const { CUSTOMER_EXPERIENCE_ROLES } = require("../constants/customerExperience.constants");
 
 const BATCH_SIZE = 200;
 
 /**
- * Customers subscribed to a store:
- * - User.followedStores (notification following)
- * - StoreMembership.status === "member" unless explicitly opted out via unfollow
- * Excludes pending-only memberships and non-customer roles.
+ * Customers who follow a store (User.followedStores) and have not opted out.
+ * Store membership alone does not subscribe to product/offer notifications.
  */
 async function getStoreSubscriberUserIds(storeId) {
   const storeObjectId = storeId?._id || storeId;
   if (!storeObjectId) return [];
 
-  const [followedUsers, members, optedOutUsers] = await Promise.all([
-    User.find({ followedStores: storeObjectId, role: "customer" })
+  const [followedUsers, optedOutUsers] = await Promise.all([
+    User.find({ followedStores: storeObjectId, role: { $in: CUSTOMER_EXPERIENCE_ROLES } })
       .select("_id")
       .lean(),
-    StoreMembership.find({ store: storeObjectId, status: "member" })
-      .select("user")
-      .lean(),
-    User.find({ storeNotificationOptOut: storeObjectId, role: "customer" })
+    User.find({ storeNotificationOptOut: storeObjectId, role: { $in: CUSTOMER_EXPERIENCE_ROLES } })
       .select("_id")
       .lean(),
   ]);
 
   const optedOut = new Set(optedOutUsers.map((u) => String(u._id)));
-  const ids = new Set();
-  followedUsers.forEach((u) => ids.add(String(u._id)));
-  members.forEach((m) => {
-    const uid = String(m.user);
-    if (!optedOut.has(uid)) ids.add(uid);
-  });
-  return [...ids];
+  return followedUsers
+    .map((u) => String(u._id))
+    .filter((uid) => !optedOut.has(uid));
 }
 
 async function hasSourceNotification(type, sourceField, sourceId) {

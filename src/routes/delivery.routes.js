@@ -4,7 +4,9 @@ const roleMiddleware = require("../middleware/role.middleware");
 const deliveryController = require("../controllers/delivery.controller");
 const deliverySessionController = require("../controllers/deliverySession.controller");
 const deliveryCompanyPortalController = require("../controllers/deliveryCompanyPortal.controller");
+const deliveryCompanyBillingController = require("../controllers/deliveryCompanyBilling.controller");
 const deliveryDriverController = require("../controllers/deliveryDriver.controller");
+const { requireDeliveryBillingAccess } = require("../middleware/deliveryBilling.middleware");
 const User = require("../models/user");
 
 const router = express.Router();
@@ -41,7 +43,11 @@ router.post("/sessions/:sessionId/cancel", deliverySessionController.cancelSessi
 router.post("/trips", authMiddleware, deliveryController.createTrip);
 
 // ── Delivery company portal ──
-router.use("/company", authMiddleware, roleMiddleware(["delivery_company"]), attachUserDoc);
+router.use("/company", authMiddleware, roleMiddleware(["delivery_company"]), attachUserDoc, requireDeliveryBillingAccess);
+router.get("/company/billing", deliveryCompanyBillingController.getMyBillingStatus);
+router.get("/company/billing/payment-methods", deliveryCompanyBillingController.getBillingPaymentMethods);
+router.post("/company/billing/payment", deliveryCompanyBillingController.submitBillingPayment);
+router.get("/company/billing/history", deliveryCompanyBillingController.getBillingHistory);
 router.get("/company/dashboard/stats", deliveryCompanyPortalController.getDashboardStats);
 router.get("/company/requests", deliveryCompanyPortalController.listRequests);
 router.get("/company/requests/:requestId", deliveryCompanyPortalController.getRequest);

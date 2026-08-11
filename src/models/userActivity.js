@@ -17,7 +17,7 @@ const userActivitySchema = new mongoose.Schema(
     },
     type: {
       type: String,
-      enum: ["view_offer", "open_offer", "view_product", "visit_store", "search", "favorite_offer"],
+      enum: ["view_offer", "open_offer", "view_product", "visit_store", "search", "favorite_offer", "favorite_product"],
       required: true,
     },
     targetType: { type: String, enum: ["Offer", "Store", "Product", null], default: null },

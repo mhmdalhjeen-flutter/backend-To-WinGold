@@ -94,6 +94,7 @@ function toAdminCompany(company, accounts = []) {
     paymentMethods,
     servedRegionIds,
     coverageCount: plain.servesAllRegions ? 0 : servedRegionIds.length,
+    handedOverOrderCount: Math.max(0, Number(plain.handedOverOrderCount) || 0),
     paymentAccounts: accounts.map((a) => ({
       _id: a._id,
       type: a.type,
@@ -117,6 +118,12 @@ function toCustomerCompany(company, accounts = [], options = {}) {
     "qrCodeUrl",
   );
   const servedRegionIds = (plain.servedRegionIds || []).map(String);
+  const regionNames = options.regionNames || {};
+  const servedRegionNames = plain.servesAllRegions
+    ? []
+    : servedRegionIds
+      .map((id) => regionNames[String(id)] || "")
+      .filter(Boolean);
 
   return {
     id: plain.slug || String(plain._id),
@@ -131,6 +138,7 @@ function toCustomerCompany(company, accounts = [], options = {}) {
     extraOrderPrice: plain.extraOrderPrice,
     currency: plain.currency || "ILS",
     servedRegionIds,
+    servedRegionNames,
     servesAllRegions: Boolean(plain.servesAllRegions),
     enabledPaymentMethods,
     paymentSettings,
@@ -147,9 +155,10 @@ function isCompanyRecommendedForRegion(company, regionId) {
 }
 
 /** Sort companies: recommended for region first, then by name. Never filters. */
-function sortCompaniesByRegionRecommendation(companies, regionId) {
+function sortCompaniesByRegionRecommendation(companies, regionId, options = {}) {
+  const { regionNames = {} } = options;
   if (!regionId) {
-    return companies.map((c) => toCustomerCompany(c.company || c, c.accounts || [], { isRecommended: false }));
+    return companies.map((c) => toCustomerCompany(c.company || c, c.accounts || [], { isRecommended: false, regionNames }));
   }
 
   const rid = String(regionId);
@@ -166,7 +175,7 @@ function sortCompaniesByRegionRecommendation(companies, regionId) {
   });
 
   return ranked.map(({ company, accounts, recommended }) =>
-    toCustomerCompany(company, accounts, { isRecommended: recommended, recommendedForRegion: recommended }));
+    toCustomerCompany(company, accounts, { isRecommended: recommended, recommendedForRegion: recommended, regionNames }));
 }
 
 async function loadCompanyWithAccounts(companyId) {

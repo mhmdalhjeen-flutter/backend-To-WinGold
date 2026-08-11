@@ -31,6 +31,10 @@ const deliveryCompanySchema = new mongoose.Schema(
     deletedAt: { type: Date, default: null, index: true },
     /** Hashed shared password for driver self-registration */
     driverRegistrationPasswordHash: { type: String, default: null, select: false },
+    /** Orders physically handed over by stores — incremented idempotently on store handover confirmation */
+    handedOverOrderCount: { type: Number, default: 0, min: 0 },
+    /** Platform monthly billing — price per delivered/handover order (default 1) */
+    pricePerDeliveredOrder: { type: Number, default: 1, min: 0 },
   },
   { timestamps: true },
 );

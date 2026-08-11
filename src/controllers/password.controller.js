@@ -14,6 +14,7 @@ const MIN_PASSWORD = 6;
 const MIN_ADMIN_PASSWORD = 8;
 const RESET_TTL_MS = 10 * 60 * 1000;
 const tokenService = require("../services/token.service");
+const { isCustomerExperienceRole } = require("../constants/customerExperience.constants");
 const {
   assertAuthBody,
   cleanAuthIdentifier,
@@ -65,7 +66,7 @@ async function findUserByIdentifier(identifier) {
 
 function assertRoleForApp(user, appType) {
   if (!appType) return null;
-  if (appType === "customer" && user.role !== "customer") {
+  if (appType === "customer" && !isCustomerExperienceRole(user.role)) {
     return "هذا الحساب غير مخصص لتطبيق الزبائن";
   }
   if (appType === "business" && !["store", "supplier"].includes(user.role)) {

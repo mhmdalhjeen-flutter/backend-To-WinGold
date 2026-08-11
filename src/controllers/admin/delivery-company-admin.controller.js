@@ -207,6 +207,7 @@ async function listCompaniesWithAccounts() {
   return companies.map((company) => ({
     ...toAdminCompany(company, byCompany[String(company._id)] || []),
     portalAccount: toPortalAccountSummary(portalByCompany[String(company._id)]),
+    deliveryProofsPath: `/delivery-proofs?companyId=${String(company._id)}`,
   }));
 }
 
@@ -313,6 +314,13 @@ exports.update = async (req, res) => {
     if (req.body.extraOrderPrice !== undefined) {
       company.extraOrderPrice = numberInRange(req.body.extraOrderPrice, {
         field: "extraOrderPrice",
+        min: 0,
+        max: 100_000,
+      });
+    }
+    if (req.body.pricePerDeliveredOrder !== undefined) {
+      company.pricePerDeliveredOrder = numberInRange(req.body.pricePerDeliveredOrder, {
+        field: "pricePerDeliveredOrder",
         min: 0,
         max: 100_000,
       });

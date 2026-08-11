@@ -11,6 +11,7 @@ const { processDataUrlImage } = require("../utils/imageProcess.util");
 const { safeLog } = require("../utils/logSanitize.util");
 const { assertNoMongoOperators, cleanString, requireObjectId } = require("../utils/inputSecurity.util");
 const { sanitizeChatParticipant } = require("../utils/userSanitize.util");
+const chatNotificationService = require("../services/chatNotification.service");
 
 const CHAT_TEXT_MAX = 2000;
 const CHAT_PARTICIPANT_SELECT = "name phone whatsapp avatar";
@@ -234,6 +235,20 @@ exports.sendMessage = async (req, res) => {
 
         const populated = await Message.findById(msg._id)
             .populate("sender", "name avatar");
+
+        const recipientId = conv.participants.find(
+            (p) => String(p._id || p) !== String(req.user.id)
+        );
+        if (recipientId) {
+            chatNotificationService.notifyChatMessage({
+                conversationId: convId,
+                senderId: req.user.id,
+                senderName: populated?.sender?.name || req.user.name || "",
+                recipientId: recipientId._id || recipientId,
+                text: msgData.text,
+                image: msgData.image,
+            }).catch(() => {});
+        }
 
         res.status(201).json({ message: populated });
     } catch (err) {

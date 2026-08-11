@@ -12,8 +12,9 @@ router.get("/me", c.getMyActivity);
 // توصيات
 router.get("/recommendations", c.getRecommendations);
 
-// مفضّلة
+// محفوظات (منتجات + عروض)
 router.get("/favorites", c.getFavorites);
 router.post("/favorites/:offerId/toggle", c.toggleFavorite);
+router.post("/saved/toggle", c.toggleSaved);
 
 module.exports = router;

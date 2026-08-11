@@ -1,5 +1,6 @@
 const UserActivity = require("../models/userActivity");
 const Offer = require("../models/offer");
+const Product = require("../models/product");
 const Store = require("../models/store");
 const activityService = require("../services/activity.service");
 const { getCustomerVisibleStoreIds } = require("../utils/storeFilter");
@@ -38,31 +39,15 @@ exports.getMyActivity = async (req, res) => {
 // تبديل مفضّلة عرض (إضافة/إزالة).
 exports.toggleFavorite = async (req, res) => {
   try {
-    const offerId = req.params.offerId;
-    const existing = await UserActivity.findOne({
-      user: req.user.id,
-      type: "favorite_offer",
-      targetId: offerId,
+    const result = await toggleSavedInternal(req.user.id, "Offer", req.params.offerId);
+    res.json({
+      favorited: result.saved,
+      saved: result.saved,
+      savedKey: result.savedKey,
+      message: result.saved ? "تم الحفظ في المحفوظات" : "تمت الإزالة من المحفوظات",
     });
-
-    if (existing) {
-      await existing.deleteOne();
-      return res.json({ favorited: false });
-    }
-
-    // نخزّن تصنيف/منطقة المتجر في meta لتغذية التوصيات لاحقاً.
-    const offer = await Offer.findById(offerId).populate("store", "category region");
-    if (!offer) return res.status(404).json({ message: "العرض غير موجود" });
-
-    await UserActivity.create({
-      user: req.user.id,
-      type: "favorite_offer",
-      targetType: "Offer",
-      targetId: offerId,
-      meta: { category: offer.store?.category, region: offer.store?.region },
-    });
-    res.json({ favorited: true });
   } catch (err) {
+    if (err.status) return res.status(err.status).json({ message: err.message });
     if (err.name === "CastError") {
       return res.status(400).json({ message: "معرّف العرض غير صحيح" });
     }
@@ -70,25 +55,135 @@ exports.toggleFavorite = async (req, res) => {
   }
 };
 
-// قائمة المفضّلة (عروض حقيقية فعّالة).
+async function toggleSavedInternal(userId, targetType, targetId) {
+  const normalizedType = String(targetType || "").trim();
+  const isProduct = normalizedType === "Product";
+  const activityType = isProduct ? "favorite_product" : "favorite_offer";
+
+  const existing = await UserActivity.findOne({
+    user: userId,
+    type: activityType,
+    targetId,
+  });
+
+  if (existing) {
+    await existing.deleteOne();
+    return { saved: false, savedKey: `${isProduct ? "product" : "offer"}:${String(targetId)}` };
+  }
+
+  if (isProduct) {
+    const product = await Product.findById(targetId).populate("store", "category region");
+    if (!product || product.isActive === false) {
+      const err = new Error("المنتج غير موجود");
+      err.status = 404;
+      throw err;
+    }
+    await UserActivity.create({
+      user: userId,
+      type: activityType,
+      targetType: "Product",
+      targetId,
+      meta: { category: product.store?.category, region: product.store?.region },
+    });
+  } else {
+    const offer = await Offer.findById(targetId).populate("store", "category region");
+    if (!offer) {
+      const err = new Error("العرض غير موجود");
+      err.status = 404;
+      throw err;
+    }
+    await UserActivity.create({
+      user: userId,
+      type: activityType,
+      targetType: "Offer",
+      targetId,
+      meta: { category: offer.store?.category, region: offer.store?.region },
+    });
+  }
+
+  return { saved: true, savedKey: `${isProduct ? "product" : "offer"}:${String(targetId)}` };
+}
+
+exports.toggleSaved = async (req, res) => {
+  try {
+    const targetType = req.body?.targetType;
+    const targetId = req.body?.targetId;
+    if (!targetType || !targetId) {
+      return res.status(400).json({ message: "نوع العنصر والمعرّف مطلوبان" });
+    }
+    const result = await toggleSavedInternal(req.user.id, targetType, targetId);
+    res.json({
+      ...result,
+      favorited: result.saved,
+      message: result.saved ? "تم الحفظ في المحفوظات" : "تمت الإزالة من المحفوظات",
+    });
+  } catch (err) {
+    if (err.status) return res.status(err.status).json({ message: err.message });
+    if (err.name === "CastError") {
+      return res.status(400).json({ message: "معرّف غير صحيح" });
+    }
+    res.status(500).json({ message: err.message });
+  }
+};
+
+// قائمة المحفوظات (منتجات + عروض فعّالة).
 exports.getFavorites = async (req, res) => {
   try {
     const favs = await UserActivity.find({
       user: req.user.id,
-      type: "favorite_offer",
+      type: { $in: ["favorite_offer", "favorite_product"] },
     }).sort({ createdAt: -1 });
 
-    const ids = favs.map((f) => f.targetId).filter(Boolean);
-    const offers = await Offer.find({ _id: { $in: ids }, isActive: true }).populate(
-      "store",
-      "name logo region subRegion category"
-    );
+    const offerIds = [];
+    const productIds = [];
+    const order = [];
 
-    // ترتيب حسب أحدث إضافة للمفضّلة.
-    const order = new Map(ids.map((id, i) => [String(id), i]));
-    offers.sort((a, b) => (order.get(String(a._id)) ?? 0) - (order.get(String(b._id)) ?? 0));
+    for (const fav of favs) {
+      if (fav.type === "favorite_product") {
+        productIds.push(fav.targetId);
+        order.push({ kind: "product", id: String(fav.targetId) });
+      } else {
+        offerIds.push(fav.targetId);
+        order.push({ kind: "offer", id: String(fav.targetId) });
+      }
+    }
 
-    res.json({ favorites: offers, favoriteIds: ids });
+    const [offers, products] = await Promise.all([
+      offerIds.length
+        ? Offer.find({ _id: { $in: offerIds }, isActive: true }).populate(
+          "store",
+          "name logo region subRegion category",
+        ).lean()
+        : [],
+      productIds.length
+        ? Product.find({ _id: { $in: productIds }, isActive: { $ne: false } }).populate(
+          "store",
+          "name logo region subRegion category",
+        ).lean()
+        : [],
+    ]);
+
+    const offerMap = new Map(offers.map((o) => [String(o._id), { ...o, __itemType: "offer" }]));
+    const productMap = new Map(products.map((p) => [String(p._id), { ...p, __itemType: "product" }]));
+
+    const items = order
+      .map((entry) => (entry.kind === "product"
+        ? productMap.get(entry.id)
+        : offerMap.get(entry.id)))
+      .filter(Boolean);
+
+    const savedKeys = items.map((item) => (
+      item.__itemType === "product"
+        ? `product:${String(item._id)}`
+        : `offer:${String(item._id)}`
+    ));
+
+    res.json({
+      items,
+      savedKeys,
+      favorites: offers,
+      favoriteIds: offerIds,
+    });
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
@@ -114,7 +209,7 @@ exports.getRecommendations = async (req, res) => {
     for (const a of activities) {
       const cat = a.meta?.category;
       const reg = a.meta?.region;
-      const weight = a.type === "favorite_offer" ? 3 : a.type === "open_offer" ? 2 : 1;
+      const weight = a.type === "favorite_offer" || a.type === "favorite_product" ? 3 : a.type === "open_offer" ? 2 : 1;
       if (cat) categoryScore[cat] = (categoryScore[cat] || 0) + weight;
       if (reg) regionScore[reg] = (regionScore[reg] || 0) + weight;
       if (a.type === "search" && a.meta?.query) searchTerms.push(String(a.meta.query));

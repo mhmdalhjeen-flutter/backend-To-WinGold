@@ -24,9 +24,10 @@ function test(name, fn) {
 
 console.log("\nStore Card Inventory Tests\n");
 
-test("inventoryKey encodes card type and points value", () => {
-  assert.strictEqual(inventoryKey("abc123", 5), "abc123:5");
-  assert.strictEqual(inventoryKey(null, 10), "none:10");
+test("inventoryKey encodes card type, points value, and source", () => {
+  assert.strictEqual(inventoryKey("abc123", 5), "abc123:5:independent");
+  assert.strictEqual(inventoryKey(null, 10), "none:10:independent");
+  assert.strictEqual(inventoryKey(null, 10, "subscription"), "none:10:subscription");
 });
 
 test("findInventoryEntry matches typed card inventory row", () => {
@@ -48,6 +49,17 @@ test("FIFO consumption uses first entry with positive count (points from card)",
   const idx = inventory.findIndex((entry) => entry.count > 0);
   assert.strictEqual(idx, 1);
   assert.strictEqual(inventory[idx].pointsValue, 10);
+});
+
+test("subscription cards are consumed before independent cards", () => {
+  const inventory = [
+    { cardType: null, pointsValue: 5, count: 2, source: "independent" },
+    { cardType: null, pointsValue: 2, count: 3, source: "subscription" },
+  ];
+  const { findConsumptionEntryIndex } = require("../src/services/storeCardInventory.service");
+  const idx = findConsumptionEntryIndex(inventory);
+  assert.strictEqual(idx, 1);
+  assert.strictEqual(inventory[idx].source, "subscription");
 });
 
 console.log(`\nResults: ${passed} passed, ${failed} failed\n`);

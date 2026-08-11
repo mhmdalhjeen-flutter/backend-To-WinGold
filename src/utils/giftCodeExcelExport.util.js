@@ -1,5 +1,7 @@
 const ExcelJS = require("exceljs");
 const { getCustomerAppUrl, buildGiftActivationUrl } = require("./giftActivationUrl.util");
+const { sanitizeExportFilename } = require("./subscriptionMonth.util");
+const { CARD_SOURCES } = require("../constants/storeSubscription.constants");
 
 function excelColWidthForText(text, min = 12, max = 60) {
   const len = String(text || "").length;
@@ -7,8 +9,34 @@ function excelColWidthForText(text, min = 12, max = 60) {
   return Math.min(Math.max(approx, min), max);
 }
 
+function normalizeExportCodeRow(code) {
+  if (typeof code === "string") {
+    return { code, source: CARD_SOURCES.INDEPENDENT };
+  }
+  return {
+    code: code?.code || "",
+    source: code?.source === CARD_SOURCES.SUBSCRIPTION
+      ? CARD_SOURCES.SUBSCRIPTION
+      : CARD_SOURCES.INDEPENDENT,
+  };
+}
+
+function formatCardSourceLabel(source) {
+  return source === CARD_SOURCES.SUBSCRIPTION ? 'اشتراك' : 'مستقل';
+}
+
+function buildGiftCodesExportFilename(storeName) {
+  const safeName = sanitizeExportFilename(storeName);
+  return `${safeName}-gift-codes.xlsx`;
+}
+
 async function buildGiftCodesExcelBuffer({ codes, storeName }) {
   if (!Array.isArray(codes) || codes.length === 0) {
+    throw new Error("No gift codes supplied for Excel export");
+  }
+
+  const normalizedCodes = codes.map(normalizeExportCodeRow).filter((row) => row.code);
+  if (!normalizedCodes.length) {
     throw new Error("No gift codes supplied for Excel export");
   }
 
@@ -22,6 +50,7 @@ async function buildGiftCodesExcelBuffer({ codes, storeName }) {
   worksheet.columns = [
     { header: "Store Name", key: "store", width: 20 },
     { header: "Gift Code", key: "code", width: 20 },
+    { header: "مصدر الكرت", key: "source", width: 16 },
     { header: "QR Value", key: "qrValue", width: 40 },
   ];
 
@@ -50,13 +79,16 @@ async function buildGiftCodesExcelBuffer({ codes, storeName }) {
 
   let maxStoreWidth = excelColWidthForText("Store Name");
   let maxCodeWidth = excelColWidthForText("Gift Code");
+  let maxSourceWidth = excelColWidthForText("Card Source");
   let maxQrWidth = excelColWidthForText("QR Value", 20, 80);
 
-  for (const code of codes) {
-    const qrValue = buildGiftActivationUrl(websiteUrl, code);
+  for (const rowData of normalizedCodes) {
+    const qrValue = buildGiftActivationUrl(websiteUrl, rowData.code);
+    const sourceLabel = formatCardSourceLabel(rowData.source);
     const row = worksheet.addRow({
       store: storeName || "",
-      code,
+      code: rowData.code,
+      source: sourceLabel,
       qrValue,
     });
 
@@ -73,23 +105,33 @@ async function buildGiftCodesExcelBuffer({ codes, storeName }) {
     };
     row.getCell(3).alignment = {
       vertical: "middle",
+      horizontal: "center",
+      readingOrder: "ltr",
+    };
+    row.getCell(4).alignment = {
+      vertical: "middle",
       horizontal: "left",
       readingOrder: "ltr",
       wrapText: false,
     };
 
     maxStoreWidth = Math.max(maxStoreWidth, excelColWidthForText(storeName));
-    maxCodeWidth = Math.max(maxCodeWidth, excelColWidthForText(code, 14, 36));
+    maxCodeWidth = Math.max(maxCodeWidth, excelColWidthForText(rowData.code, 14, 36));
+    maxSourceWidth = Math.max(maxSourceWidth, excelColWidthForText(sourceLabel, 12, 24));
     maxQrWidth = Math.max(maxQrWidth, excelColWidthForText(qrValue, 20, 80));
   }
 
   worksheet.getColumn(1).width = maxStoreWidth;
   worksheet.getColumn(2).width = maxCodeWidth;
-  worksheet.getColumn(3).width = maxQrWidth;
+  worksheet.getColumn(3).width = maxSourceWidth;
+  worksheet.getColumn(4).width = maxQrWidth;
 
   return workbook.xlsx.writeBuffer();
 }
 
 module.exports = {
   buildGiftCodesExcelBuffer,
+  buildGiftCodesExportFilename,
+  formatCardSourceLabel,
+  normalizeExportCodeRow,
 };

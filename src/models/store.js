@@ -141,7 +141,29 @@ const storeSchema = new mongoose.Schema({
         cardType: { type: mongoose.Schema.Types.ObjectId, ref: "CardType", default: null },
         pointsValue: { type: Number, required: true, min: 1 },
         count: { type: Number, default: 0, min: 0 },
+        source: {
+            type: String,
+            enum: ["subscription", "independent"],
+            default: "independent",
+        },
+        subscriptionPeriodId: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: "StoreSubscriptionPeriod",
+            default: null,
+        },
     }],
+
+    /** إعدادات كروت الاشتراك الشهري الافتراضية للمتجر */
+    subscriptionCardConfig: {
+        digital: {
+            quantity: { type: Number, default: 50, min: 0 },
+            pointsPerCard: { type: Number, default: 2, min: 1 },
+        },
+        paper: {
+            quantity: { type: Number, default: 150, min: 0 },
+            pointsPerCard: { type: Number, default: 1, min: 1 },
+        },
+    },
 
     bypassCards: {
         type: Boolean,

@@ -3,7 +3,6 @@ const assert = require("node:assert/strict");
 const mongoose = require("mongoose");
 
 const User = require("../src/models/user");
-const StoreMembership = require("../src/models/storeMembership");
 const Notification = require("../src/models/notification");
 
 const {
@@ -15,12 +14,12 @@ const {
 } = require("../src/services/storeSubscriberNotification.service");
 
 const { resolvePushTargetApp, resolveCustomerPushUrl } = require("../src/utils/pushTarget.util");
+const { CUSTOMER_EXPERIENCE_ROLES } = require("../src/constants/customerExperience.constants");
 
 const notificationService = require("../src/services/notification.service");
 
 const originalCreateMany = notificationService.createMany;
 const originalUserFind = User.find;
-const originalMembershipFind = StoreMembership.find;
 const originalNotificationFindOne = Notification.findOne;
 
 let createManyCalls = [];
@@ -39,7 +38,6 @@ function installCreateManySpy() {
 function restoreSpies() {
   notificationService.createMany = originalCreateMany;
   User.find = originalUserFind;
-  StoreMembership.find = originalMembershipFind;
   Notification.findOne = originalNotificationFindOne;
 }
 
@@ -58,11 +56,6 @@ function mockSubscribers(userIds = [], memberIds = [], optedOutIds = []) {
       }),
     };
   };
-  StoreMembership.find = () => ({
-    select: () => ({
-      lean: async () => memberIds.map((id) => ({ user: id })),
-    }),
-  });
   Notification.findOne = () => ({
     select: () => ({
       lean: async () => null,
@@ -86,20 +79,19 @@ test("resolveCustomerPushUrl builds product and offer deep links", () => {
   );
 });
 
-test("getStoreSubscriberUserIds unions followedStores and active members without duplicates", async () => {
+test("getStoreSubscriberUserIds returns followed customers excluding opted-out users", async () => {
   const storeId = new mongoose.Types.ObjectId();
   const followedOnly = new mongoose.Types.ObjectId();
+  const optedOutFollower = new mongoose.Types.ObjectId();
   const memberOnly = new mongoose.Types.ObjectId();
-  const both = new mongoose.Types.ObjectId();
-  const optedOutMember = new mongoose.Types.ObjectId();
 
   User.find = (query) => {
     if (query.followedStores) {
       assert.equal(String(query.followedStores), String(storeId));
-      assert.equal(query.role, "customer");
+      assert.deepEqual(query.role, { $in: [...CUSTOMER_EXPERIENCE_ROLES] });
       return {
         select: () => ({
-          lean: async () => [{ _id: followedOnly }, { _id: both }],
+          lean: async () => [{ _id: followedOnly }, { _id: optedOutFollower }],
         }),
       };
     }
@@ -107,7 +99,7 @@ test("getStoreSubscriberUserIds unions followedStores and active members without
       assert.equal(String(query.storeNotificationOptOut), String(storeId));
       return {
         select: () => ({
-          lean: async () => [{ _id: optedOutMember }],
+          lean: async () => [{ _id: optedOutFollower }],
         }),
       };
     }
@@ -118,26 +110,9 @@ test("getStoreSubscriberUserIds unions followedStores and active members without
     };
   };
 
-  StoreMembership.find = (query) => {
-    assert.equal(String(query.store), String(storeId));
-    assert.equal(query.status, "member");
-    return {
-      select: () => ({
-        lean: async () => [
-          { user: memberOnly },
-          { user: both },
-          { user: optedOutMember },
-        ],
-      }),
-    };
-  };
-
   const ids = await getStoreSubscriberUserIds(storeId);
-  assert.deepEqual(new Set(ids), new Set([
-    String(followedOnly),
-    String(memberOnly),
-    String(both),
-  ]));
+  assert.deepEqual(new Set(ids), new Set([String(followedOnly)]));
+  assert.equal(ids.includes(String(memberOnly)), false);
 
   restoreSpies();
 });

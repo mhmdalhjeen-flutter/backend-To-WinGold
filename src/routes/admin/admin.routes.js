@@ -27,6 +27,9 @@ const userCenter = require("../../controllers/user-center.controller");
 const usersAdmin = require("../../controllers/admin/users-admin.controller");
 const deliveryCompanyAdmin = require("../../controllers/admin/delivery-company-admin.controller");
 const deliveryProofAdmin = require("../../controllers/admin/delivery-proof-admin.controller");
+const storeSubscriptionAdmin = require("../../controllers/admin/store-subscription-admin.controller");
+const deliveryBillingAdmin = require("../../controllers/admin/delivery-billing-admin.controller");
+const monthlyCycleSimulationAdmin = require("../../controllers/admin/monthly-cycle-simulation.controller");
 const auditController = require("../../controllers/admin/audit.controller");
 const adminSensitiveController = require("../../controllers/admin-sensitive.controller");
 const adminAuditMiddleware = require("../../middleware/adminAudit.middleware");
@@ -495,5 +498,33 @@ router.put("/delivery-companies/:id/portal-account", deliveryCompanyAdmin.update
 router.get("/delivery-proofs", deliveryProofAdmin.list);
 router.get("/delivery-proofs/filter-options", deliveryProofAdmin.filterOptions);
 router.get("/delivery-proofs/:id", deliveryProofAdmin.getOne);
+
+// ─── اشتراك المتاجر الشهري ───────────────────────────────────────────────────
+router.get("/store-subscriptions", storeSubscriptionAdmin.listSubscriptionCards);
+router.patch("/store-subscriptions/periods/:periodId/approve", storeSubscriptionAdmin.approveSubscriptionPayment);
+router.patch("/store-subscriptions/periods/:periodId/reject", storeSubscriptionAdmin.rejectSubscriptionPayment);
+router.patch("/store-subscriptions/stores/:storeId/exempt", storeSubscriptionAdmin.exemptStoreSubscription);
+router.post("/store-subscriptions/exempt-all-except", storeSubscriptionAdmin.exemptAllExcept);
+router.patch("/store-subscriptions/stores/:storeId/card-quantities", storeSubscriptionAdmin.setStoreCardQuantities);
+router.get("/store-subscriptions/periods/:periodId/export-paper-codes", storeSubscriptionAdmin.exportSubscriptionPaperCodes);
+router.get("/store-subscriptions/stores/:storeId/contact", storeSubscriptionAdmin.getStoreOwnerContact);
+
+router.get("/subscription-payment-methods", storeSubscriptionAdmin.listPlatformPaymentAccounts);
+router.post("/subscription-payment-methods", storeSubscriptionAdmin.createPlatformPaymentAccount);
+router.patch("/subscription-payment-methods/:accountId", storeSubscriptionAdmin.updatePlatformPaymentAccount);
+router.patch("/subscription-payment-methods/:accountId/activate", storeSubscriptionAdmin.activatePlatformPaymentAccount);
+router.delete("/subscription-payment-methods/:accountId", storeSubscriptionAdmin.deletePlatformPaymentAccount);
+
+// ─── اشتراك شركات التوصيل الشهري ─────────────────────────────────────────────
+router.get("/delivery-subscriptions", deliveryBillingAdmin.listBillingCards);
+router.patch("/delivery-subscriptions/periods/:periodId/approve", deliveryBillingAdmin.approveBillingPayment);
+router.patch("/delivery-subscriptions/periods/:periodId/reject", deliveryBillingAdmin.rejectBillingPayment);
+router.patch("/delivery-subscriptions/periods/:periodId/exempt", deliveryBillingAdmin.exemptBillingPeriod);
+router.patch("/delivery-subscriptions/companies/:companyId/price-per-order", deliveryBillingAdmin.setPricePerOrder);
+router.get("/delivery-subscriptions/companies/:companyId/history", deliveryBillingAdmin.getCompanyBillingHistory);
+
+// ─── محاكاة دورة شهرية (اختبار — أدمن فقط) ─────────────────────────────────
+router.get("/monthly-cycle-simulation/status", monthlyCycleSimulationAdmin.getSimulationStatus);
+router.post("/monthly-cycle-simulation/run", monthlyCycleSimulationAdmin.runMonthlyCycleSimulation);
 
 module.exports = router;

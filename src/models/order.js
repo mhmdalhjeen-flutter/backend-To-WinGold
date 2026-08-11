@@ -100,6 +100,15 @@ const orderSchema = new mongoose.Schema({
   deleteAfter: { type: Date },
   statusTimeline: [statusTimelineSchema],
 
+  /** Set when the store confirms handover to the delivery company (accounting event) */
+  deliveryCompanyHandoverAt: { type: Date, default: null },
+  deliveryCompanyHandoverCompany: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'DeliveryCompany',
+    default: null,
+    index: true,
+  },
+
   /** Store requested customer to modify the order */
   modificationRequest: {
     reason: {

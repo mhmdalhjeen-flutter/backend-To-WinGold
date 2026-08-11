@@ -18,6 +18,7 @@ const {
 } = require("../utils/userSanitize.util");
 const verificationService = require("../services/verification.service");
 const platformSettings = require("../services/platformSettings.service");
+const { isCustomerExperienceRole } = require("../constants/customerExperience.constants");
 const auditService = require("../services/audit.service");
 const tokenService = require("../services/token.service");
 const { safeLog } = require("../utils/logSanitize.util");
@@ -405,7 +406,7 @@ const login = async (req, res) => {
     }
 
     if (appType) {
-      if (appType === "customer" && user.role !== "customer") {
+      if (appType === "customer" && !isCustomerExperienceRole(user.role)) {
         await logAttempt(false, "دور غير متطابق — تطبيق زبائن", user);
         return res.status(403).json({
           message: "هذا الحساب غير مخصص لتطبيق الزبائن"

@@ -35,6 +35,8 @@ const isPrimaryWorker = () => {
 const monitorOffers = require("./src/utils/offerMonitor");
 const monitorCompetitions = require("./src/utils/competitionMonitor");
 const monitorBazaar = require("./src/utils/bazaarMonitor");
+const { monitorStoreSubscriptions } = require("./src/utils/storeSubscriptionMonitor");
+const { monitorDeliveryBilling } = require("./src/utils/deliveryBillingMonitor");
 const { logVapidStartupStatus } = require("./src/config/vapid");
 
 dotenv.config();
@@ -282,10 +284,14 @@ const startServer = async () => {
             monitorOffers();
             monitorBazaar();
             monitorCompetitions();
+            monitorStoreSubscriptions();
+            monitorDeliveryBilling();
 
             setInterval(() => {
                 monitorOffers();
                 monitorBazaar();
+                monitorStoreSubscriptions();
+                monitorDeliveryBilling();
             }, 24 * 60 * 60 * 1000);
 
             setInterval(() => {
