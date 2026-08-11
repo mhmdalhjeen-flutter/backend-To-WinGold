@@ -1,6 +1,6 @@
 const DeliveryCompany = require("../models/deliveryCompany");
 const DeliveryCompanyPaymentAccount = require("../models/deliveryCompanyPaymentAccount");
-const Region = require("../models/Region");
+const Region = require("../models/region");
 const { toCustomerCompany, sortCompaniesByRegionRecommendation } = require("../services/deliveryCompany.service");
 const { requireObjectId } = require("../utils/inputSecurity.util");
 

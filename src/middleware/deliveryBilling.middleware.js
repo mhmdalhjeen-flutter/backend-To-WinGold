@@ -35,5 +35,4 @@ async function requireDeliveryBillingAccess(req, res, next) {
 
 module.exports = {
   requireDeliveryBillingAccess,
-  BILLING_STATUSES,
 };

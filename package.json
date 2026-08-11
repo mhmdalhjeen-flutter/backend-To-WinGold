@@ -17,6 +17,7 @@
   "dependencies": {
     "@fontsource/cairo": "^5.3.0",
     "arabic-persian-reshaper": "^1.0.1",
+    "axios": "^1.19.0",
     "bcryptjs": "^3.0.3",
     "bidi-js": "^1.0.3",
     "cloudinary": "^1.41.3",
