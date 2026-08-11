@@ -43,12 +43,21 @@ function restoreSpies() {
   Notification.findOne = originalNotificationFindOne;
 }
 
-function mockSubscribers(userIds = [], memberIds = []) {
-  User.find = () => ({
-    select: () => ({
-      lean: async () => userIds.map((id) => ({ _id: id })),
-    }),
-  });
+function mockSubscribers(userIds = [], memberIds = [], optedOutIds = []) {
+  User.find = (query) => {
+    if (query?.storeNotificationOptOut) {
+      return {
+        select: () => ({
+          lean: async () => optedOutIds.map((id) => ({ _id: id })),
+        }),
+      };
+    }
+    return {
+      select: () => ({
+        lean: async () => userIds.map((id) => ({ _id: id })),
+      }),
+    };
+  };
   StoreMembership.find = () => ({
     select: () => ({
       lean: async () => memberIds.map((id) => ({ user: id })),
@@ -82,13 +91,29 @@ test("getStoreSubscriberUserIds unions followedStores and active members without
   const followedOnly = new mongoose.Types.ObjectId();
   const memberOnly = new mongoose.Types.ObjectId();
   const both = new mongoose.Types.ObjectId();
+  const optedOutMember = new mongoose.Types.ObjectId();
 
   User.find = (query) => {
-    assert.equal(String(query.followedStores), String(storeId));
-    assert.equal(query.role, "customer");
+    if (query.followedStores) {
+      assert.equal(String(query.followedStores), String(storeId));
+      assert.equal(query.role, "customer");
+      return {
+        select: () => ({
+          lean: async () => [{ _id: followedOnly }, { _id: both }],
+        }),
+      };
+    }
+    if (query.storeNotificationOptOut) {
+      assert.equal(String(query.storeNotificationOptOut), String(storeId));
+      return {
+        select: () => ({
+          lean: async () => [{ _id: optedOutMember }],
+        }),
+      };
+    }
     return {
       select: () => ({
-        lean: async () => [{ _id: followedOnly }, { _id: both }],
+        lean: async () => [],
       }),
     };
   };
@@ -98,7 +123,11 @@ test("getStoreSubscriberUserIds unions followedStores and active members without
     assert.equal(query.status, "member");
     return {
       select: () => ({
-        lean: async () => [{ user: memberOnly }, { user: both }],
+        lean: async () => [
+          { user: memberOnly },
+          { user: both },
+          { user: optedOutMember },
+        ],
       }),
     };
   };

@@ -1,6 +1,8 @@
 const { toCanonicalStatus, normalizePaymentMethod } = require('../constants/marketplaceOrder.constants');
 const DeliverySession = require('../models/deliverySession');
 const DeliveryCompany = require('../models/deliveryCompany');
+const DeliveryCompanyDriver = require('../models/deliveryCompanyDriver');
+const User = require('../models/user');
 const {
   normalizeSessionStatus,
   getCustomerStatusLabel,
@@ -10,7 +12,7 @@ const {
   getCustomerDeliveryStatusMessage,
 } = require('./orderTimeline.util');
 
-function summarizeDeliverySession(session, company = null) {
+function summarizeDeliverySession(session, company = null, chatTargets = {}) {
   if (!session) return null;
   const plain = typeof session.toObject === 'function' ? session.toObject() : { ...session };
   const status = normalizeSessionStatus(plain.status);
@@ -18,6 +20,8 @@ function summarizeDeliverySession(session, company = null) {
   const timeline = plain.statusTimeline || [];
   const lastTimeline = timeline[timeline.length - 1];
   const companyPlain = company || plain.deliveryCompany;
+  const driverId = assigned?.driverId ? String(assigned.driverId) : '';
+  const companyId = plain.deliveryCompany ? String(plain.deliveryCompany) : '';
 
   const summary = {
     id: plain._id,
@@ -27,15 +31,53 @@ function summarizeDeliverySession(session, company = null) {
     driverName: assigned?.name || '',
     driverPhone: assigned?.phone || '',
     driverWhatsapp: assigned?.whatsapp || assigned?.phone || '',
-    assignedDriver: assigned,
+    assignedDriver: assigned
+      ? {
+          ...assigned,
+          userId: chatTargets.driverUsers?.[driverId] || assigned.userId || null,
+        }
+      : null,
     rejectionReason: plain.rejectionReason || (status === 'rejected' ? lastTimeline?.note || '' : ''),
     lastUpdatedAt: lastTimeline?.at || plain.updatedAt || plain.createdAt,
     companyName: companyPlain?.name || '',
     companyPhone: companyPlain?.phone || '',
     companyWhatsapp: companyPlain?.whatsapp || companyPlain?.phone || '',
+    companyChatUserId: chatTargets.companyUsers?.[companyId] || null,
   };
 
   return summary;
+}
+
+async function loadDeliveryChatTargets(sessions = []) {
+  const driverIds = [...new Set(
+    sessions
+      .map((s) => s.assignedDriver?.driverId)
+      .filter(Boolean)
+      .map(String),
+  )];
+  const companyIds = [...new Set(
+    sessions.map((s) => s.deliveryCompany).filter(Boolean).map(String),
+  )];
+
+  const [drivers, companyUsers] = await Promise.all([
+    driverIds.length
+      ? DeliveryCompanyDriver.find({ _id: { $in: driverIds } }).select('userId').lean()
+      : [],
+    companyIds.length
+      ? User.find({ role: 'delivery_company', deliveryCompanyId: { $in: companyIds } })
+        .select('_id deliveryCompanyId')
+        .lean()
+      : [],
+  ]);
+
+  const driverUsers = Object.fromEntries(
+    drivers.filter((d) => d.userId).map((d) => [String(d._id), String(d.userId)]),
+  );
+  const companyUsersMap = Object.fromEntries(
+    companyUsers.map((u) => [String(u.deliveryCompanyId), String(u._id)]),
+  );
+
+  return { driverUsers, companyUsers: companyUsersMap };
 }
 
 async function enrichOrdersWithDeliverySession(orders) {
@@ -54,11 +96,12 @@ async function enrichOrdersWithDeliverySession(orders) {
     ? await DeliveryCompany.find({ _id: { $in: companyIds } }).select('name phone whatsapp').lean()
     : [];
   const companyById = Object.fromEntries(companies.map((c) => [String(c._id), c]));
+  const chatTargets = await loadDeliveryChatTargets(sessions);
 
   const byId = Object.fromEntries(
     sessions.map((s) => [
       String(s._id),
-      summarizeDeliverySession(s, companyById[String(s.deliveryCompany)]),
+      summarizeDeliverySession(s, companyById[String(s.deliveryCompany)], chatTargets),
     ]),
   );
 
@@ -81,6 +124,8 @@ function enrichOrderDeliveryFields(order, delivery = null) {
     deliveryCompanyName: delivery?.companyName || '',
     deliveryCompanyPhone: delivery?.companyPhone || '',
     deliveryCompanyWhatsapp: delivery?.companyWhatsapp || '',
+    deliveryCompanyChatUserId: delivery?.companyChatUserId || null,
+    deliveryDriverChatUserId: delivery?.assignedDriver?.userId || null,
     orderTimeline: timeline,
   };
 }
@@ -103,7 +148,8 @@ async function enrichSingleOrder(order, options = {}) {
     company = await DeliveryCompany.findById(session.deliveryCompany).select('name phone whatsapp').lean();
   }
 
-  const delivery = session ? summarizeDeliverySession(session, company) : null;
+  const chatTargets = await loadDeliveryChatTargets(session ? [session] : []);
+  const delivery = session ? summarizeDeliverySession(session, company, chatTargets) : null;
   const enriched = enrichOrderDeliveryFields({
     ...formatted,
     statusTimeline: order.statusTimeline || [],

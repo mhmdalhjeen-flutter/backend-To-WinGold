@@ -21,7 +21,7 @@ function buildPushPayload(doc) {
   return {
     title: doc.title,
     body: doc.body || "",
-    icon: "/brand/logo-192.webp",
+    icon: "/brand/logo-64.png",
     url,
     type,
     notificationId: String(doc._id),

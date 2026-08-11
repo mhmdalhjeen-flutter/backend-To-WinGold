@@ -8,26 +8,33 @@ const BATCH_SIZE = 200;
 
 /**
  * Customers subscribed to a store:
- * - User.followedStores (network / notification bell)
- * - StoreMembership.status === "member" (code-based membership)
+ * - User.followedStores (notification following)
+ * - StoreMembership.status === "member" unless explicitly opted out via unfollow
  * Excludes pending-only memberships and non-customer roles.
  */
 async function getStoreSubscriberUserIds(storeId) {
   const storeObjectId = storeId?._id || storeId;
   if (!storeObjectId) return [];
 
-  const [followedUsers, members] = await Promise.all([
+  const [followedUsers, members, optedOutUsers] = await Promise.all([
     User.find({ followedStores: storeObjectId, role: "customer" })
       .select("_id")
       .lean(),
     StoreMembership.find({ store: storeObjectId, status: "member" })
       .select("user")
       .lean(),
+    User.find({ storeNotificationOptOut: storeObjectId, role: "customer" })
+      .select("_id")
+      .lean(),
   ]);
 
+  const optedOut = new Set(optedOutUsers.map((u) => String(u._id)));
   const ids = new Set();
   followedUsers.forEach((u) => ids.add(String(u._id)));
-  members.forEach((m) => ids.add(String(m.user)));
+  members.forEach((m) => {
+    const uid = String(m.user);
+    if (!optedOut.has(uid)) ids.add(uid);
+  });
   return [...ids];
 }
 

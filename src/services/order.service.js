@@ -8,7 +8,7 @@ const storeCardInventoryService = require("./storeCardInventory.service");
 const membershipService = require("./storeMembership.service");
 const { restoreStockForOrderItems, restoreItemsToStoreContainer } = require("./cart.service");
 const { cleanString } = require("../utils/inputSecurity.util");
-const { DELIVERY_METHODS } = require("../constants/marketplaceOrder.constants");
+const { DELIVERY_METHODS, normalizePaymentMethod } = require("../constants/marketplaceOrder.constants");
 const {
   ALLOWED_STATUSES,
   canTransition,
@@ -95,7 +95,7 @@ async function getCustomerActiveOrders(customerId) {
   })
     .select(ORDER_LIST_SELECT)
     .sort({ createdAt: -1 })
-    .populate("store", "name phone")
+    .populate("store", "name phone owner whatsapp")
     .lean();
 }
 
@@ -120,7 +120,7 @@ async function getCustomerOrderHistory(customerId) {
   })
     .select(ORDER_LIST_SELECT)
     .sort({ createdAt: -1 })
-    .populate("store", "name phone")
+    .populate("store", "name phone owner whatsapp")
     .lean();
 }
 
@@ -895,6 +895,20 @@ async function setStoreBypassCards(adminId, storeId, bypass) {
 }
 
 async function cancelOrderByCustomer(customerId, orderId) {
+  const preview = await Order.findOne({ _id: orderId, customer: customerId }).select("status paymentMethod");
+  if (!preview) {
+    const err = new Error("الطلب غير موجود");
+    err.status = 404;
+    throw err;
+  }
+
+  const digitalMethods = new Set(["bank", "palpay", "jawwal_pay"]);
+  if (digitalMethods.has(normalizePaymentMethod(preview.paymentMethod))) {
+    const err = new Error("لا يمكن إلغاء الطلب بعد الدفع الإلكتروني");
+    err.status = 400;
+    throw err;
+  }
+
   const session = await mongoose.startSession();
   try {
     session.startTransaction();

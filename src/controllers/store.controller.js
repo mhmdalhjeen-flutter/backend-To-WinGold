@@ -145,31 +145,31 @@ exports.followStore = async (req, res) => {
                 (id) => id.toString() !== storeIdStr
             );
             if (!isBusiness) {
-                store.customersCount = Math.max(0, store.customersCount - 1);
-                await store.save();
+                const optedOut = (user.storeNotificationOptOut || []).some(
+                    (id) => id.toString() === storeIdStr
+                );
+                if (!optedOut) {
+                    user.storeNotificationOptOut = user.storeNotificationOptOut || [];
+                    user.storeNotificationOptOut.push(storeId);
+                }
             }
             await user.save();
             return res.status(200).json({
-                message: isBusiness ? "تم إلغاء المتابعة" : "تم إلغاء الانضمام للمتجر",
+                message: isBusiness ? "تم إلغاء المتابعة" : "تم إلغاء متابعة المتجر",
                 isFollowing: false,
             });
         }
 
         user.followedStores.push(storeId);
         if (!isBusiness) {
-            store.customersCount += 1;
-            await store.save();
-            await logActivity({
-                action: "انضمام لمتجر",
-                details: `الزبون ${user.name} انضم لقائمة زبائن متجر ${store.name}`,
-                user: userId,
-                store: storeId,
-            });
+            user.storeNotificationOptOut = (user.storeNotificationOptOut || []).filter(
+                (id) => id.toString() !== storeIdStr
+            );
         }
         await user.save();
 
         return res.status(200).json({
-            message: isBusiness ? "تمت المتابعة بنجاح" : "تم الانضمام لزبائن المتجر بنجاح",
+            message: isBusiness ? "تمت المتابعة بنجاح" : "تمت متابعة المتجر",
             isFollowing: true,
         });
     } catch (error) {

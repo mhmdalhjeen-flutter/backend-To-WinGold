@@ -103,6 +103,11 @@ const userSchema = new mongoose.Schema({
         type: mongoose.Schema.Types.ObjectId,
         ref: "Store"
     }],
+    /** Stores where the customer opted out of product/offer notifications while keeping membership. */
+    storeNotificationOptOut: [{
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "Store",
+    }],
     lastChestOpened: {
         type: Date,
         default: null
@@ -204,6 +209,7 @@ userSchema.pre("save", function () {
 userSchema.index({ role: 1, createdAt: -1 });
 userSchema.index({ role: 1, points: -1, createdAt: -1 });
 userSchema.index({ followedStores: 1 });
+userSchema.index({ storeNotificationOptOut: 1 });
 userSchema.index({ referredBy: 1, referralRewardGranted: 1 });
 userSchema.index({ status: 1 });
 

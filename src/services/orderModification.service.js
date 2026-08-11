@@ -831,9 +831,44 @@ async function resolveRemoveUnavailable(order, store, body = {}, clientOperation
   });
 
   if (!kept.length) {
-    const err = new Error("لا يمكن إزالة كل المنتجات — اختر بدائل أو تواصل مع المتجر");
-    err.status = 400;
-    throw err;
+    await cartService.restoreStockForOrderItems(order.items, null);
+
+    order.items = [];
+    order.subtotal = 0;
+    order.total = 0;
+    order.totalAmount = 0;
+    order.status = "cancelled";
+    order.modificationRequest = null;
+    order.statusTimeline = pushTimeline(order, "cancelled", "ألغى الزبون الطلب بعد إزالة جميع المنتجات");
+    order.orderChangeHistory = pushChangeHistory(order, {
+      type: "order_cancelled",
+      note: "تم إلغاء الطلب بعد إزالة جميع المنتجات غير المتوفرة",
+      actor: "customer",
+      meta: {
+        removed: removed.map((i) => ({
+          name: i.name,
+          quantity: i.quantity,
+          subtotal: itemLineTotal(i),
+        })),
+      },
+    });
+
+    stampClientOperationId(order, clientOperationId);
+    await order.save();
+    await syncOrderContentsInSessions(order._id).catch(() => {});
+
+    await notifyStore(order, store, {
+      type: "order_cancelled",
+      title: "تم إلغاء الطلب",
+      body: `ألغى الزبون الطلب ${order.orderNumber || ""} بعد إزالة جميع المنتجات`.trim(),
+    });
+
+    return {
+      message: "تم إلغاء الطلب",
+      cancelled: true,
+      partial: false,
+      order: formatOrderResponse(order),
+    };
   }
 
   await cartService.restoreStockForOrderItems(removed, null);
