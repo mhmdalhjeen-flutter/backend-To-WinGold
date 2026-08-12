@@ -33,6 +33,17 @@ const { applyProductDisplayPrioritySort } = require("../utils/displayPriority.ut
 /** Matches OfferViewDedup TTL (30 min) — dedupe window for anonymous view counts */
 const VIEW_DEDUP_MS = 30 * 60 * 1000;
 
+function applyPublicExpiryFilter(offerQuery) {
+  offerQuery.expiresAt = { $gt: new Date() };
+  return offerQuery;
+}
+
+function isOfferPubliclyVisible(offer) {
+  if (!offer || offer.isActive === false) return false;
+  if (!offer.expiresAt) return true;
+  return new Date(offer.expiresAt) > new Date();
+}
+
 function stripHeavyFields(offer) {
   if (!offer || typeof offer !== "object") return offer;
   const o = resolveListImageField(offer, "offers");
@@ -90,6 +101,7 @@ async function applySearchToOfferQuery(offerQuery, q) {
 async function buildPublicOfferQuery(query) {
   const { category, region, subRegion } = query;
   const offerQuery = { isActive: true };
+  applyPublicExpiryFilter(offerQuery);
   const storeQuery = {};
 
   if (category) {
@@ -132,6 +144,7 @@ async function listOfferFeed(query, userId) {
   const limit = Math.min(parseInt(query.limit, 10) || 12, 50);
 
   const offerQuery = { isActive: true };
+  applyPublicExpiryFilter(offerQuery);
   const storeQuery = {};
   if (category) {
     const names = await getCategoryAndDescendantNames(category);
@@ -247,7 +260,7 @@ async function getOfferById(offerId, { incrementViews = false, userId, clientId 
     "name phone whatsapp region subRegion logo category owner isVerifiedStore ratingAvg ratingCount"
   );
 
-  if (!offer) {
+  if (!offer || !isOfferPubliclyVisible(offer)) {
     const err = new Error("العرض غير موجود");
     err.status = 404;
     throw err;
@@ -270,6 +283,7 @@ async function listCategoryReels(query, userId) {
   const sections = buildDisplaySections(categories);
 
   const offerQuery = { isActive: true };
+  applyPublicExpiryFilter(offerQuery);
   const storeQuery = {};
   const regionFilter = subRegion || region;
   if (regionFilter) await applyRegionToStoreQuery(storeQuery, regionFilter);
@@ -392,7 +406,7 @@ async function getDashboardOffers(user, query = {}) {
 
   let ownOffers = [];
   if (myStore) {
-    ownOffers = await Offer.find({ store: myStore._id, isActive: true })
+    ownOffers = await Offer.find({ store: myStore._id, isActive: true, expiresAt: { $gt: new Date() } })
       .select(LIST_OFFER_SELECT)
       .sort({ priority: -1, createdAt: -1 })
       .limit(ownLimit)
@@ -406,6 +420,7 @@ async function getDashboardOffers(user, query = {}) {
     networkOffers = await Offer.find({
       store: { $in: networkStoreIds },
       isActive: true,
+      expiresAt: { $gt: new Date() },
     })
       .select(LIST_OFFER_SELECT)
       .populate("store", "name logo category region subRegion isVerifiedStore")

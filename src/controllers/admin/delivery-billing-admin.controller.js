@@ -69,6 +69,19 @@ exports.getCompanyBillingHistory = async (req, res) => {
   }
 };
 
+exports.getCompanyHandovers = async (req, res) => {
+  try {
+    const companyId = requireObjectId(req.params.companyId, "companyId");
+    const handoverService = require("../../services/deliveryCompanyHandover.service");
+    const { getCurrentMonthKey } = require("../../utils/subscriptionMonth.util");
+    const monthKey = req.query.monthKey || getCurrentMonthKey();
+    const handovers = await handoverService.listAdminHandoversForMonth(companyId, monthKey);
+    res.json({ monthKey, handovers });
+  } catch (err) {
+    res.status(err.status || 500).json({ message: err.message });
+  }
+};
+
 exports.listPlatformPaymentMethods = async (_req, res) => {
   try {
     const methods = await platformSubscriptionPaymentService.listActiveAccountsForStores();

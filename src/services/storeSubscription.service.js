@@ -379,16 +379,26 @@ async function getSubscriptionPaperCodesForExport(periodId) {
     err.status = 400;
     throw err;
   }
+  if (!period.paperCodeIds?.length && !(period.paperCardsIssued > 0)) {
+    const err = new Error("لا توجد كروت ورقية مُصدَّرة لهذه الفترة");
+    err.status = 400;
+    throw err;
+  }
   if (!period.paperCodeIds?.length) {
-    const err = new Error("لا توجد أكواد ورقية لهذه الفترة");
+    const err = new Error("لا توجد أكواد ورقية لهذه الفترة — تأكد من إصدار الكروت بعد الاعتماد");
     err.status = 400;
     throw err;
   }
 
   const codes = await PromoCode.find({
     _id: { $in: period.paperCodeIds },
-    cardSource: CARD_SOURCES.SUBSCRIPTION,
-  }).select("code cardSource").lean();
+  }).select("code cardSource subscriptionPeriodId").lean();
+
+  if (!codes.length) {
+    const err = new Error("تعذّر العثور على أكواد الكروت الورقية في قاعدة البيانات");
+    err.status = 404;
+    throw err;
+  }
 
   return {
     storeName: period.store?.name || "",

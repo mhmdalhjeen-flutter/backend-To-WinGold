@@ -525,6 +525,7 @@ router.patch("/delivery-subscriptions/periods/:periodId/reject", deliveryBilling
 router.patch("/delivery-subscriptions/periods/:periodId/exempt", deliveryBillingAdmin.exemptBillingPeriod);
 router.patch("/delivery-subscriptions/companies/:companyId/price-per-order", deliveryBillingAdmin.setPricePerOrder);
 router.get("/delivery-subscriptions/companies/:companyId/history", deliveryBillingAdmin.getCompanyBillingHistory);
+router.get("/delivery-subscriptions/companies/:companyId/handovers", deliveryBillingAdmin.getCompanyHandovers);
 
 // ─── محاكاة دورة شهرية (اختبار — أدمن فقط) ─────────────────────────────────
 router.get("/monthly-cycle-simulation/status", monthlyCycleSimulationAdmin.getSimulationStatus);

@@ -66,6 +66,15 @@ exports.syncOffline = async (req, res) => {
   }
 };
 
+exports.listPendingConfirmations = async (req, res) => {
+  try {
+    const pending = await deliveryDriverService.listPendingConfirmations(driverAuthUser(req));
+    res.json({ pending });
+  } catch (err) {
+    res.status(err.status || 500).json({ message: err.message });
+  }
+};
+
 exports.getRegistrationPasswordStatus = async (req, res) => {
   try {
     const data = await deliveryDriverService.getDriverRegistrationPasswordStatus(req.userDoc || req.user);

@@ -528,6 +528,13 @@ async function completeDelivery(user, sessionId, body = {}) {
     );
   }
 
+  try {
+    const handoverService = require("./deliveryCompanyHandover.service");
+    await handoverService.markDriverConfirmedForOrders(orderIds, driver._id);
+  } catch (handoverErr) {
+    // Non-blocking — delivery completion already persisted
+  }
+
   const formatted = deliverySessionService.formatSessionDetails(session, company);
 
   setImmediate(() => {
@@ -608,6 +615,12 @@ async function getDriverRegistrationPasswordStatus(user) {
   };
 }
 
+async function listPendingConfirmations(user) {
+  const driver = await resolveDriverFromUser(user);
+  const handoverService = require("./deliveryCompanyHandover.service");
+  return handoverService.listDriverPendingConfirmations(driver._id);
+}
+
 module.exports = {
   verifyDriverRegistrationPassword,
   registerDriver,
@@ -619,4 +632,5 @@ module.exports = {
   syncOfflineCompletions,
   setDriverRegistrationPassword,
   getDriverRegistrationPasswordStatus,
+  listPendingConfirmations,
 };

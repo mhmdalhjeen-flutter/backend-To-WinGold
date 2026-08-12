@@ -11,6 +11,7 @@ const {
 const {
   getCurrentMonthKey,
   getPreviousMonthKey,
+  addMonthsToMonthKey,
 } = require("../utils/subscriptionMonth.util");
 const { getMonthBounds, formatMonthLabel } = require("../utils/billingMonth.util");
 const { parseSubscriptionPaymentSubmission, serializePaymentForOwner } = require("../utils/storeSubscriptionPayment.util");
@@ -47,35 +48,55 @@ async function countHandoversInMonth(companyId, monthKey) {
   });
 }
 
-async function ensureCountingPeriod(companyId, monthKey, session = null) {
-  const existing = await DeliveryCompanyBillingPeriod.findOne({
+async function findBillingPeriod(companyId, monthKey, session = null) {
+  return DeliveryCompanyBillingPeriod.findOne({
     deliveryCompany: companyId,
     monthKey,
-    status: BILLING_STATUSES.COUNTING,
   }).session(session || null);
+}
 
+/**
+ * Atomically get or create the single billing-period document for company+monthKey.
+ * Safe under concurrent handover increments (unique index on deliveryCompany+monthKey).
+ */
+async function findOrCreateCountingPeriod(companyId, monthKey, session = null) {
+  const existing = await findBillingPeriod(companyId, monthKey, session);
   if (existing) return existing;
 
-  const openPeriod = await DeliveryCompanyBillingPeriod.findOne({
-    deliveryCompany: companyId,
-    monthKey,
-    status: { $nin: CLOSED_BILLING_STATUSES },
-  }).session(session || null);
-
-  if (openPeriod) return openPeriod;
-
   const { pricePerOrder, currency } = await getCompanyBillingConfig(companyId);
-  const createOpts = session ? { session } : {};
-  const [created] = await DeliveryCompanyBillingPeriod.create([{
-    deliveryCompany: companyId,
-    monthKey,
-    status: BILLING_STATUSES.COUNTING,
-    deliveredOrderCount: 0,
-    pricePerOrder,
-    amountDue: 0,
-    currency,
-  }], createOpts);
-  return created;
+  const opts = {
+    upsert: true,
+    new: true,
+    setDefaultsOnInsert: true,
+    ...(session ? { session } : {}),
+  };
+
+  return DeliveryCompanyBillingPeriod.findOneAndUpdate(
+    { deliveryCompany: companyId, monthKey },
+    {
+      $setOnInsert: {
+        deliveryCompany: companyId,
+        monthKey,
+        status: BILLING_STATUSES.COUNTING,
+        deliveredOrderCount: 0,
+        pricePerOrder,
+        amountDue: 0,
+        currency,
+        closedAt: null,
+      },
+    },
+    opts,
+  );
+}
+
+async function ensureCountingPeriod(companyId, monthKey, session = null) {
+  const existing = await findBillingPeriod(companyId, monthKey, session);
+  if (existing) {
+    if (existing.status === BILLING_STATUSES.COUNTING) return existing;
+    if (!CLOSED_SET.has(existing.status)) return existing;
+    return existing;
+  }
+  return findOrCreateCountingPeriod(companyId, monthKey, session);
 }
 
 async function incrementHandoverCount(companyId, handoverAt = new Date()) {
@@ -150,35 +171,20 @@ async function findOldestOpenBillingPeriod(companyId) {
   }).sort({ monthKey: 1 });
 }
 
-async function startNewCountingCycleAfterClose(companyId, session) {
+async function startNewCountingCycleAfterClose(companyId, session, closedMonthKey) {
   const currentMonthKey = getCurrentMonthKey();
-  const existingCounting = await DeliveryCompanyBillingPeriod.findOne({
-    deliveryCompany: companyId,
-    monthKey: currentMonthKey,
-    status: BILLING_STATUSES.COUNTING,
-  }).session(session);
+  const closedKey = closedMonthKey || currentMonthKey;
 
-  if (existingCounting) return existingCounting;
+  // One document per company+monthKey — never insert a second row for a closed month.
+  let targetMonthKey = currentMonthKey;
+  if (closedKey >= currentMonthKey) {
+    targetMonthKey = addMonthsToMonthKey(closedKey, 1);
+  }
 
-  const openCurrent = await DeliveryCompanyBillingPeriod.findOne({
-    deliveryCompany: companyId,
-    monthKey: currentMonthKey,
-    status: { $nin: CLOSED_BILLING_STATUSES },
-  }).session(session);
+  const targetExisting = await findBillingPeriod(companyId, targetMonthKey, session);
+  if (targetExisting) return targetExisting;
 
-  if (openCurrent) return openCurrent;
-
-  const { pricePerOrder, currency } = await getCompanyBillingConfig(companyId);
-  const [created] = await DeliveryCompanyBillingPeriod.create([{
-    deliveryCompany: companyId,
-    monthKey: currentMonthKey,
-    status: BILLING_STATUSES.COUNTING,
-    deliveredOrderCount: 0,
-    pricePerOrder,
-    amountDue: 0,
-    currency,
-  }], { session });
-  return created;
+  return findOrCreateCountingPeriod(companyId, targetMonthKey, session);
 }
 
 async function completeBillingCycle(periodId, adminId, { outcome }) {
@@ -221,7 +227,7 @@ async function completeBillingCycle(periodId, adminId, { outcome }) {
       throw err;
     }
 
-    await startNewCountingCycleAfterClose(period.deliveryCompany, session);
+    await startNewCountingCycleAfterClose(period.deliveryCompany, session, period.monthKey);
     await session.commitTransaction();
 
     if (outcome === "paid") {
@@ -390,7 +396,7 @@ async function getCompanyBillingStatus(companyId, date = new Date()) {
   ]);
 
   if (!currentPeriod) {
-    await ensureCountingPeriod(companyId, currentMonthKey);
+    await findOrCreateCountingPeriod(companyId, currentMonthKey);
   }
 
   const refreshedCurrent = currentPeriod
@@ -508,6 +514,8 @@ module.exports = {
   listBillingHistory,
   listAdminBillingCards,
   ensureCountingPeriod,
+  findOrCreateCountingPeriod,
+  findBillingPeriod,
   countHandoversInMonth,
   computeAmountDue,
 };

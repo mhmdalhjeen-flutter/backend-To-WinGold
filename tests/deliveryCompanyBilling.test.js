@@ -21,7 +21,10 @@ const {
   rejectBillingPayment,
   exemptBillingPeriod,
   computeAmountDue,
+  findOrCreateCountingPeriod,
+  findBillingPeriod,
 } = require("../src/services/deliveryCompanyBilling.service");
+const { getCurrentMonthKey, addMonthsToMonthKey } = require("../src/utils/subscriptionMonth.util");
 
 require("../src/services/deliveryCompanyBillingNotification.service").notifyBillingRequired = async () => {};
 require("../src/services/deliveryCompanyBillingNotification.service").notifyBillingSubmitted = async () => {};
@@ -158,6 +161,17 @@ DeliveryCompanyBillingPeriod.updateOne = async (query, update) => {
 };
 
 DeliveryCompanyBillingPeriod.findOneAndUpdate = async (query, update, _opts) => {
+  if (query.deliveryCompany && query.monthKey && update?.$setOnInsert) {
+    let period = periods.get(periodKey(query.deliveryCompany, query.monthKey));
+    if (!period) {
+      const id = new mongoose.Types.ObjectId();
+      period = { ...update.$setOnInsert, _id: id };
+      periods.set(String(id), period);
+      periods.set(periodKey(period.deliveryCompany, period.monthKey), period);
+    }
+    return period;
+  }
+
   const period = query._id ? periods.get(String(query._id)) : null;
   if (!period) return null;
   if (query.status?.$in && !query.status.$in.includes(period.status)) return null;
@@ -277,10 +291,45 @@ test("exemptBillingPeriod closes cycle like approval", async () => {
     closedAt: null,
   };
   periods.set(String(periodId), awaiting);
+  periods.set(periodKey(companyId, "2026-07"), awaiting);
 
   const exempted = await exemptBillingPeriod(periodId, adminId);
   assert.equal(exempted.status, BILLING_STATUSES.EXEMPTED);
   assert.ok(exempted.closedAt);
+});
+
+test("findOrCreateCountingPeriod is idempotent for same company and month", async () => {
+  const first = await findOrCreateCountingPeriod(companyId, "2026-08");
+  const second = await findOrCreateCountingPeriod(companyId, "2026-08");
+  assert.equal(String(first._id), String(second._id));
+  assert.ok(periods.get(periodKey(companyId, "2026-08")));
+});
+
+test("closing current month does not create duplicate month document", async () => {
+  const currentMonthKey = getCurrentMonthKey();
+  const closedPeriod = {
+    _id: periodId,
+    deliveryCompany: companyId,
+    monthKey: currentMonthKey,
+    status: BILLING_STATUSES.PAYMENT_PENDING,
+    deliveredOrderCount: 5,
+    amountDue: 5,
+    closedAt: null,
+  };
+  periods.set(String(periodId), closedPeriod);
+  periods.set(periodKey(companyId, currentMonthKey), closedPeriod);
+
+  await approveBillingPayment(periodId, adminId);
+
+  const closed = periods.get(periodKey(companyId, currentMonthKey));
+  assert.equal(closed.status, BILLING_STATUSES.PAID);
+  assert.ok(closed.closedAt);
+
+  const nextMonthKey = addMonthsToMonthKey(currentMonthKey, 1);
+  const nextPeriod = periods.get(periodKey(companyId, nextMonthKey));
+  assert.ok(nextPeriod);
+  assert.equal(nextPeriod.status, BILLING_STATUSES.COUNTING);
+  assert.equal(periods.get(periodKey(companyId, currentMonthKey))._id, closed._id);
 });
 
 test.after(() => {

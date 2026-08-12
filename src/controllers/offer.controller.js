@@ -40,6 +40,26 @@ function resolveAutoDeleteAt(expiresAt) {
     return exp < maxLife ? exp : maxLife;
 }
 
+function assertExpiresWithinMaxDays(expiresAt, anchorDate = new Date()) {
+    const expDate = new Date(expiresAt);
+    if (Number.isNaN(expDate.getTime())) {
+        throw Object.assign(new Error("تاريخ انتهاء غير صالح"), { status: 400 });
+    }
+    const now = new Date();
+    if (expDate <= now) {
+        throw Object.assign(new Error("تاريخ انتهاء العرض يجب أن يكون في المستقبل"), { status: 400 });
+    }
+    const anchor = anchorDate instanceof Date ? anchorDate : new Date(anchorDate);
+    const maxAllowed = new Date(anchor.getTime() + MAX_OFFER_DAYS * 24 * 60 * 60 * 1000);
+    if (expDate > maxAllowed) {
+        throw Object.assign(
+            new Error("تاريخ انتهاء العرض لا يمكن أن يتجاوز 7 أيام من تاريخ البداية"),
+            { status: 400 },
+        );
+    }
+    return expDate;
+}
+
 function buildOfferPayload(body, storeId, userId) {
     assertNoMongoOperators(body, "offer");
     const {
@@ -65,10 +85,7 @@ function buildOfferPayload(body, storeId, userId) {
     if (!OFFER_TYPES.includes(safeOfferType)) throw Object.assign(new Error("نوع العرض غير صالح"), { status: 400 });
     if (!expiresAt) throw new Error("تاريخ انتهاء العرض مطلوب");
 
-    const expDate = new Date(expiresAt);
-    if (Number.isNaN(expDate.getTime()) || expDate <= new Date()) {
-        throw new Error("تاريخ انتهاء العرض يجب أن يكون في المستقبل");
-    }
+    const expDate = assertExpiresWithinMaxDays(expiresAt);
 
     const safeValue = value != null && value !== "" ? numberInRange(value, { field: "value", min: 0, max: 10_000_000 }) : null;
     const safeOriginalPrice = originalPrice != null && originalPrice !== ""
@@ -242,14 +259,14 @@ exports.renewOffer = async (req, res) => {
             : MAX_OFFER_DAYS;
         const now = new Date();
         if (req.body.expiresAt) {
-            const expDate = new Date(req.body.expiresAt);
-            if (Number.isNaN(expDate.getTime())) {
-                return res.status(400).json({ message: "تاريخ انتهاء غير صالح" });
-            }
+            const expDate = assertExpiresWithinMaxDays(req.body.expiresAt, now);
             offer.expiresAt = expDate;
             offer.autoDeleteAt = resolveAutoDeleteAt(expDate);
         } else {
-            const newExpiresAt = new Date(now.getTime() + renewalDays * 24 * 60 * 60 * 1000);
+            const newExpiresAt = assertExpiresWithinMaxDays(
+                new Date(now.getTime() + renewalDays * 24 * 60 * 60 * 1000),
+                now,
+            );
             offer.expiresAt = newExpiresAt;
             offer.autoDeleteAt = resolveAutoDeleteAt(newExpiresAt);
         }
@@ -370,9 +387,8 @@ exports.updateOffer = async (req, res) => {
             else if (field === "priceUnit") offer.priceUnit = cleanString(patch.priceUnit, { field: "priceUnit", max: 40 });
             else if (field === "purchaseMode") offer.purchaseMode = normalizePurchaseMode(patch.purchaseMode);
             else if (field === "expiresAt") {
-                const expDate = new Date(patch.expiresAt);
-                if (Number.isNaN(expDate.getTime())) return res.status(400).json({ message: "تاريخ انتهاء غير صالح" });
-                offer.expiresAt = expDate;
+                const anchor = offer.createdAt || new Date();
+                offer.expiresAt = assertExpiresWithinMaxDays(patch.expiresAt, anchor);
             }
         }
         if (patch.expiresAt) {

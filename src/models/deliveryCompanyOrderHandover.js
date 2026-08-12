@@ -32,6 +32,26 @@ const deliveryCompanyOrderHandoverSchema = new mongoose.Schema(
       default: Date.now,
       index: true,
     },
+    assignedDriverId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "DeliveryCompanyDriver",
+      default: null,
+      index: true,
+    },
+    driverConfirmedAt: {
+      type: Date,
+      default: null,
+      index: true,
+    },
+    driverConfirmedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "DeliveryCompanyDriver",
+      default: null,
+    },
+    driverConfirmationReminderSent: {
+      type: Boolean,
+      default: false,
+    },
   },
   { timestamps: true },
 );

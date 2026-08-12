@@ -37,6 +37,7 @@ const monitorCompetitions = require("./src/utils/competitionMonitor");
 const monitorBazaar = require("./src/utils/bazaarMonitor");
 const { monitorStoreSubscriptions } = require("./src/utils/storeSubscriptionMonitor");
 const { monitorDeliveryBilling } = require("./src/utils/deliveryBillingMonitor");
+const { monitorDriverConfirmations } = require("./src/utils/deliveryDriverConfirmationMonitor");
 const { logVapidStartupStatus } = require("./src/config/vapid");
 
 dotenv.config();
@@ -286,6 +287,7 @@ const startServer = async () => {
             monitorCompetitions();
             monitorStoreSubscriptions();
             monitorDeliveryBilling();
+            monitorDriverConfirmations();
 
             setInterval(() => {
                 monitorOffers();
@@ -293,6 +295,10 @@ const startServer = async () => {
                 monitorStoreSubscriptions();
                 monitorDeliveryBilling();
             }, 24 * 60 * 60 * 1000);
+
+            setInterval(() => {
+                monitorDriverConfirmations();
+            }, 60 * 60 * 1000);
 
             setInterval(() => {
                 monitorCompetitions();

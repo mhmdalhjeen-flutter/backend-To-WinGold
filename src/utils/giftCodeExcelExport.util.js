@@ -32,12 +32,16 @@ function buildGiftCodesExportFilename(storeName) {
 
 async function buildGiftCodesExcelBuffer({ codes, storeName }) {
   if (!Array.isArray(codes) || codes.length === 0) {
-    throw new Error("No gift codes supplied for Excel export");
+    const err = new Error("لا توجد أكواد للتصدير");
+    err.status = 400;
+    throw err;
   }
 
   const normalizedCodes = codes.map(normalizeExportCodeRow).filter((row) => row.code);
   if (!normalizedCodes.length) {
-    throw new Error("No gift codes supplied for Excel export");
+    const err = new Error("لا توجد أكواد صالحة للتصدير");
+    err.status = 400;
+    throw err;
   }
 
   const websiteUrl = getCustomerAppUrl();

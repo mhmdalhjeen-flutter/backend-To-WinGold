@@ -82,6 +82,7 @@ router.get("/company/proofs/:proofId", deliveryCompanyPortalController.getProof)
 router.use("/driver", authMiddleware, roleMiddleware(["delivery_driver"]), attachUserDoc);
 router.get("/driver/assignments", deliveryDriverController.listAssignments);
 router.get("/driver/assignments/history", deliveryDriverController.listHistory);
+router.get("/driver/pending-confirmations", deliveryDriverController.listPendingConfirmations);
 router.get("/driver/assignments/:assignmentId", deliveryDriverController.getAssignment);
 router.patch("/driver/assignments/:assignmentId/complete", deliveryDriverController.completeDelivery);
 router.post("/driver/assignments/sync", deliveryDriverController.syncOffline);
