@@ -173,7 +173,14 @@ function buildHistoryQuery(filters = {}) {
     const regex = new RegExp(filters.q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
     q.$and = q.$and || [];
     q.$and.push({
-      $or: [{ orderNumber: regex }, { containerName: regex }],
+      $or: [
+        { orderNumber: regex },
+        { verificationCode: regex },
+        { containerName: regex },
+        { customerName: regex },
+        { customerPhone: regex },
+        { storeName: regex },
+      ],
     });
   }
 
@@ -244,7 +251,7 @@ async function getStoreInvoices(ownerId, filters = {}) {
 }
 
 async function getAdminOrderHistory(filters = {}) {
-  const q = buildHistoryQuery(filters);
+  const q = buildHistoryQuery({ ...filters, historyOnly: false });
 
   const orders = await Order.find(q)
     .select(ORDER_LIST_SELECT)
@@ -255,6 +262,22 @@ async function getAdminOrderHistory(filters = {}) {
     .lean();
 
   return { orders, count: orders.length };
+}
+
+async function getAdminOrderById(orderId) {
+  const order = await Order.findById(orderId)
+    .select(ORDER_LIST_SELECT)
+    .populate("customer", "name phone email")
+    .populate("store", "name phone region whatsapp owner")
+    .lean();
+
+  if (!order) {
+    const err = new Error("الطلب غير موجود");
+    err.status = 404;
+    throw err;
+  }
+
+  return order;
 }
 
 async function getOrderDetail(requester, orderId) {
@@ -1070,6 +1093,7 @@ module.exports = {
   getStoreOrderHistory,
   getStoreInvoices,
   getAdminOrderHistory,
+  getAdminOrderById,
   getOrderDetail,
   updateOrderStatus,
   updateOrderStoreNotes,

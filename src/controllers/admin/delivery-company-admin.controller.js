@@ -232,13 +232,22 @@ exports.create = async (req, res) => {
     const phone = cleanString(req.body.phone, { field: "phone", max: 32, required: true });
     const address = cleanString(req.body.address, { field: "address", max: 500, required: true });
     const slug = await ensureUniqueSlug(name);
+    const deliveryFee = req.body.deliveryFeePerOrder ?? req.body.basePrice ?? 0;
+    const basePrice = numberInRange(deliveryFee, { field: "deliveryFeePerOrder", min: 0, max: 100_000 });
+    const logo = req.body.logo
+      ? await processOptionalImage(req.body.logo, {
+        maxWidth: 512,
+        enforceCloudinaryHttps: true,
+      })
+      : "";
 
     const company = await DeliveryCompany.create({
       name,
       slug,
       phone,
       address,
-      basePrice: 0,
+      logo,
+      basePrice,
       extraOrderPrice: 0,
       currency: "ILS",
       isActive: req.body.isActive !== false,

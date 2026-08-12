@@ -34,7 +34,6 @@ const deliveryCompanyBillingPeriodSchema = new mongoose.Schema({
   paymentMethod: {
     type: String,
     enum: PAYMENT_TYPE_IDS,
-    default: "",
   },
   transferInformation: { type: transferInfoSchema, default: () => ({}) },
   paymentProof: { type: String, default: "" },

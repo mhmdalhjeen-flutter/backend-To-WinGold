@@ -51,8 +51,9 @@ async function parseSubscriptionPaymentSubmission(body = {}) {
 
 function serializePaymentForOwner(period) {
   if (!period) return null;
+  const paymentMethod = period.paymentMethod ? String(period.paymentMethod).trim() : "";
   return {
-    paymentMethod: period.paymentMethod || "",
+    paymentMethod: paymentMethod || null,
     transferInformation: period.transferInformation || {},
     paymentProof: period.paymentProof || "",
     paymentProofImage: period.paymentProofImage || period.paymentProof || "",

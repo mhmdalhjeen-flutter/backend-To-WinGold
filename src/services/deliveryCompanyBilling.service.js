@@ -13,8 +13,9 @@ const {
   getPreviousMonthKey,
 } = require("../utils/subscriptionMonth.util");
 const { getMonthBounds, formatMonthLabel } = require("../utils/billingMonth.util");
-const { parseSubscriptionPaymentSubmission } = require("../utils/storeSubscriptionPayment.util");
+const { parseSubscriptionPaymentSubmission, serializePaymentForOwner } = require("../utils/storeSubscriptionPayment.util");
 const billingNotification = require("./deliveryCompanyBillingNotification.service");
+const { getPaymentTypeLabel } = require("../utils/paymentMethodTypes.util");
 
 const CLOSED_SET = new Set(CLOSED_BILLING_STATUSES);
 
@@ -449,12 +450,18 @@ async function listAdminBillingCards(date = new Date()) {
         .filter((p) => OPEN_BILLING_STATUSES.includes(p.status) && !p.closedAt)
         .sort((a, b) => a.monthKey.localeCompare(b.monthKey))[0] || null;
       const reviewPeriod = periods.find((p) => p.status === BILLING_STATUSES.PAYMENT_PENDING) || null;
+      const billPeriod = openPeriod || reviewPeriod;
+      const paymentSubmitted = Boolean(reviewPeriod);
 
       const billingStatus = reviewPeriod?.status
         || openPeriod?.status
         || previousPeriod?.status
         || currentPeriod?.status
         || BILLING_STATUSES.COUNTING;
+
+      const billCount = billPeriod?.deliveredOrderCount ?? 0;
+      const billPrice = billPeriod?.pricePerOrder ?? Number(company.pricePerDeliveredOrder ?? DEFAULT_PRICE_PER_ORDER);
+      const billTotal = billPeriod?.amountDue ?? computeAmountDue(billCount, billPrice);
 
       return {
         company,
@@ -463,10 +470,26 @@ async function listAdminBillingCards(date = new Date()) {
         previousPeriod: serializePeriod(previousPeriod),
         openPeriod: serializePeriod(openPeriod),
         reviewPeriod: serializePeriod(reviewPeriod),
+        billPeriod: serializePeriod(billPeriod),
         billingStatus,
-        canReview: Boolean(reviewPeriod),
-        canExempt: Boolean(openPeriod || reviewPeriod),
-        exemptPeriodId: (reviewPeriod || openPeriod)?._id || null,
+        paymentSubmitted,
+        canVerify: paymentSubmitted,
+        canReview: paymentSubmitted,
+        canExempt: Boolean(billPeriod),
+        verifyPeriodId: reviewPeriod?._id || null,
+        exemptPeriodId: billPeriod?._id || null,
+        billSummary: billPeriod ? {
+          monthKey: billPeriod.monthKey,
+          monthLabel: formatMonthLabel(billPeriod.monthKey),
+          deliveredOrderCount: billCount,
+          pricePerOrder: billPrice,
+          amountDue: billTotal,
+          currency: billPeriod.currency || company.currency || "ILS",
+        } : null,
+        payment: reviewPeriod ? {
+          ...serializePaymentForOwner(reviewPeriod),
+          paymentMethodLabel: getPaymentTypeLabel(reviewPeriod.paymentMethod),
+        } : null,
       };
     }),
   };

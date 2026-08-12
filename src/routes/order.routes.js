@@ -75,6 +75,18 @@ router.get("/admin/history", roleMiddleware.admin, async (req, res) => {
   }
 });
 
+router.get("/admin/:id", roleMiddleware.admin, async (req, res) => {
+  try {
+    const orderId = requireObjectId(req.params.id, "id");
+    const order = await orderService.getAdminOrderById(orderId);
+    const { enrichSingleOrder } = require("../utils/orderPresentation.util");
+    const enriched = await enrichSingleOrder(order);
+    res.json({ order: enriched });
+  } catch (err) {
+    handleServiceError(res, err);
+  }
+});
+
 router.get("/:id", marketplaceOrderController.getOrderDetail);
 
 router.patch("/:id/confirm", roleMiddleware.business, marketplaceOrderController.confirmOrder);

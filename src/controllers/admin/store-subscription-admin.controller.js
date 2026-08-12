@@ -1,6 +1,7 @@
 const Store = require("../../models/store");
 const storeSubscriptionService = require("../../services/storeSubscription.service");
 const platformSubscriptionPaymentService = require("../../services/platformSubscriptionPayment.service");
+const { getPaymentTypeLabel } = require("../../utils/paymentMethodTypes.util");
 const { requireObjectId, assertNoMongoOperators } = require("../../utils/inputSecurity.util");
 const { getCurrentMonthKey } = require("../../utils/subscriptionMonth.util");
 const { buildGiftCodesExcelBuffer, buildGiftCodesExportFilename } = require("../../utils/giftCodeExcelExport.util");
@@ -118,7 +119,12 @@ exports.getStoreOwnerContact = async (req, res) => {
 exports.listPlatformPaymentAccounts = async (req, res) => {
   try {
     const accounts = await platformSubscriptionPaymentService.listAllAccounts();
-    res.json({ accounts });
+    res.json({
+      accounts: accounts.map((account) => ({
+        ...account,
+        label: getPaymentTypeLabel(account.type),
+      })),
+    });
   } catch (err) {
     res.status(err.status || 500).json({ message: err.message });
   }

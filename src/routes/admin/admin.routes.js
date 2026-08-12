@@ -35,7 +35,7 @@ const adminSensitiveController = require("../../controllers/admin-sensitive.cont
 const adminAuditMiddleware = require("../../middleware/adminAudit.middleware");
 const { requireObjectId } = require("../../utils/inputSecurity.util");
 
-const ADMIN_STORE_LIST_SELECT = "name phone whatsapp region subRegion category logo isActive isVerifiedStore displayPriority owner cards bypassCards subscriptionActive createdAt";
+const ADMIN_STORE_LIST_SELECT = "name phone whatsapp region subRegion regionId subRegionId category logo isActive isVerifiedStore displayPriority owner cards bypassCards subscriptionActive createdAt";
 const ADMIN_PRODUCT_LIST_SELECT = "name description price currency wholesalePrice isWholesale minOrderQuantity image stock freeDelivery isActive displayPriority createdAt";
 const ADMIN_OFFER_LIST_SELECT = "title description offerType value originalPrice finalPrice currency image freeDelivery isActive priority featuredPriority displayPriority expiresAt createdAt";
 
@@ -104,6 +104,9 @@ router.get("/treasure-boxes",  boxAdminController.getTreasureBoxes);
 
 // ─── إحصائيات وتنبيهات ───────────────────────────────────────────────────────
 router.get("/dashboard", dashboardController.getDashboard);
+router.get("/dashboard/users-by-region", dashboardController.getUsersByRegion);
+router.get("/dashboard/stores-by-region", dashboardController.getStoresByRegion);
+router.get("/dashboard/orders-daily", dashboardController.getOrdersDaily);
 router.get("/stats", dashboardController.getStats);
 router.get("/analytics", analyticsController.getAnalytics);
 router.get("/heatmaps", heatmapController.getHeatMaps);
