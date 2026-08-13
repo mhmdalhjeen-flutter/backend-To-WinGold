@@ -8,7 +8,14 @@ const Region = require("../models/region");
 
 const LOCATION_NOT_SPECIFIED = "Location not specified";
 
-const DELIVERED_STATUSES = ["delivered_to_customer", "delivered", "completed_off_platform"];
+/** Orders counted as delivered for admin dashboard (handover + customer pickup). */
+const DELIVERED_STATUSES = [
+  "delivery_handover_complete",
+  "delivered_to_driver",
+  "delivered_to_customer",
+  "delivered",
+  "completed_off_platform",
+];
 
 const AR_MONTH_NAMES = [
   "يناير", "فبراير", "مارس", "أبريل", "مايو", "يونيو",
@@ -88,7 +95,7 @@ function buildOrderTimelineWithMonths(dailyRows, days) {
   end.setHours(0, 0, 0, 0);
 
   const dayKeys = [];
-  for (let i = 0; i < days; i += 1) {
+  for (let i = days - 1; i >= 0; i -= 1) {
     const d = new Date(end);
     d.setDate(end.getDate() - i);
     dayKeys.push(d.toISOString().slice(0, 10));
@@ -146,7 +153,7 @@ async function getSummaryCards() {
     DeliveryCompany.countDocuments({ deletedAt: null }),
     Product.countDocuments(),
     Offer.countDocuments(),
-    Order.countDocuments(),
+    Order.countDocuments({ status: { $in: DELIVERED_STATUSES } }),
   ]);
 
   return {
@@ -249,13 +256,16 @@ async function getOrderDailyTimeline(days = 90) {
     {
       $match: {
         status: { $in: DELIVERED_STATUSES },
-        $or: [
-          { completedAt: { $gte: start, $lte: end } },
-          {
-            completedAt: null,
-            updatedAt: { $gte: start, $lte: end },
-          },
-        ],
+      },
+    },
+    {
+      $project: {
+        statAt: { $ifNull: ["$deliveryCompanyHandoverAt", "$completedAt", "$updatedAt"] },
+      },
+    },
+    {
+      $match: {
+        statAt: { $gte: start, $lte: end },
       },
     },
     {
@@ -263,7 +273,7 @@ async function getOrderDailyTimeline(days = 90) {
         deliveredDay: {
           $dateToString: {
             format: "%Y-%m-%d",
-            date: { $ifNull: ["$completedAt", "$updatedAt"] },
+            date: "$statAt",
           },
         },
       },

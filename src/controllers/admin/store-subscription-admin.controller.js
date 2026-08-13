@@ -5,6 +5,7 @@ const { getPaymentTypeLabel } = require("../../utils/paymentMethodTypes.util");
 const { requireObjectId, assertNoMongoOperators } = require("../../utils/inputSecurity.util");
 const { getCurrentMonthKey } = require("../../utils/subscriptionMonth.util");
 const { buildGiftCodesExcelBuffer, buildGiftCodesExportFilename } = require("../../utils/giftCodeExcelExport.util");
+const { sendExcelDownload } = require("../../utils/excelDownload.util");
 
 exports.listSubscriptionCards = async (req, res) => {
   try {
@@ -83,12 +84,7 @@ exports.exportSubscriptionPaperCodes = async (req, res) => {
       storeName: exportData.storeName,
     });
 
-    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
-    res.setHeader(
-      "Content-Disposition",
-      `attachment; filename="${buildGiftCodesExportFilename(exportData.storeName)}"`,
-    );
-    res.send(xlsxBuffer);
+    sendExcelDownload(res, xlsxBuffer, buildGiftCodesExportFilename(exportData.storeName));
   } catch (err) {
     res.status(err.status || 500).json({ message: err.message });
   }

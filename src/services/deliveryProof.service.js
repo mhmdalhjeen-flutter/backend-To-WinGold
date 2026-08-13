@@ -1,6 +1,7 @@
 const DeliverySession = require("../models/deliverySession");
 const DeliveryCompany = require("../models/deliveryCompany");
 const DeliveryCompanyDriver = require("../models/deliveryCompanyDriver");
+const Order = require("../models/order");
 const { SESSION_STATUSES } = require("../constants/deliverySession.constants");
 const { cleanString, requireObjectId } = require("../utils/inputSecurity.util");
 
@@ -47,6 +48,57 @@ function formatProofCard(session, { includeCompany = true } = {}) {
   }
 
   return card;
+}
+
+function mapOrderItems(items = []) {
+  return items.map((item) => ({
+    name: item.name || item.productName || "—",
+    quantity: item.quantity,
+    image: item.image || item.productImage || "",
+  }));
+}
+
+function expandSessionToOrderCards(session, meta) {
+  const cards = [];
+  const stops = session.storeStops || [];
+
+  if (stops.length > 0) {
+    stops.forEach((stop) => {
+      cards.push({
+        sessionId: meta.id || meta._id || session._id,
+        orderId: stop.order,
+        orderNumber: stop.orderNumber || "",
+        customerName: meta.customerName || "",
+        driverName: meta.driverName || "",
+        companyName: meta.companyName || "",
+        companyId: meta.companyId || null,
+        verificationCode: stop.verificationCode || meta.verificationCode || "",
+        deliveredAt: meta.deliveredAt,
+        hasPhoto: meta.hasPhoto,
+      });
+    });
+    return cards;
+  }
+
+  const orderIds = meta.orderIds?.length ? meta.orderIds : (session.orders || []);
+  const orderNumbers = meta.orderNumbers || [];
+
+  orderIds.forEach((orderId, index) => {
+    cards.push({
+      sessionId: meta.id || meta._id || session._id,
+      orderId,
+      orderNumber: orderNumbers[index] || "",
+      customerName: meta.customerName || "",
+      driverName: meta.driverName || "",
+      companyName: meta.companyName || "",
+      companyId: meta.companyId || null,
+      verificationCode: meta.verificationCode || "",
+      deliveredAt: meta.deliveredAt,
+      hasPhoto: meta.hasPhoto,
+    });
+  });
+
+  return cards;
 }
 
 function buildProofQuery(filters = {}, { companyId = null } = {}) {
@@ -109,6 +161,7 @@ function buildProofQuery(filters = {}, { companyId = null } = {}) {
         { "assignedDriver.name": regex },
         { "storeStops.verificationCode": regex },
         { "storeStops.orderNumber": regex },
+        { "deliveryProofSnapshot.orderNumbers": regex },
       ],
     });
   }
@@ -161,6 +214,94 @@ async function listProofs(filters = {}, { companyId = null, includeCompany = tru
 
   const sessions = await q.lean();
   return sessions.map((s) => formatProofCard(s, { includeCompany }));
+}
+
+async function listProofOrders(filters = {}, { companyId = null, includeCompany = true, limit = 100 } = {}) {
+  const query = buildProofQuery(filters, { companyId });
+  let q = DeliverySession.find(query)
+    .select(
+      "deliveryProofSnapshot driverDeliveryProof driverDeliveryNote driverDeliveredAt assignedDriver customer customerName customerPhone deliveryCompany orders storeStops status updatedAt",
+    )
+    .sort({ "deliveryProofSnapshot.deliveredAt": -1, driverDeliveredAt: -1, updatedAt: -1 })
+    .limit(Math.min(parseInt(limit, 10) || 100, 300));
+
+  if (includeCompany) {
+    q = q.populate("deliveryCompany", "name phone");
+  }
+
+  const sessions = await q.lean();
+  return sessions.flatMap((session) => {
+    const meta = formatProofCard(session, { includeCompany });
+    return expandSessionToOrderCards(session, meta);
+  });
+}
+
+async function getProofOrderDetail(sessionId, orderId, { companyId = null, includeCompany = true } = {}) {
+  const sid = requireObjectId(sessionId, "sessionId");
+  const oid = requireObjectId(orderId, "orderId");
+  const query = { _id: sid };
+  if (companyId) query.deliveryCompany = companyId;
+
+  let q = DeliverySession.findOne(query).select(
+    "deliveryProofSnapshot driverDeliveryProof driverDeliveryNote driverDeliveredAt assignedDriver customer customerName customerPhone deliveryCompany orders storeStops status updatedAt",
+  );
+  if (includeCompany) {
+    q = q.populate("deliveryCompany", "name phone");
+  }
+
+  const session = await q.lean();
+  if (!session) {
+    const err = new Error("جلسة التوصيل غير موجودة");
+    err.status = 404;
+    throw err;
+  }
+
+  const hasProof = Boolean(
+    session.deliveryProofSnapshot?.photo || session.driverDeliveryProof,
+  );
+  if (!hasProof) {
+    const err = new Error("لا يوجد إثبات توصيل لهذا الطلب");
+    err.status = 404;
+    throw err;
+  }
+
+  const sessionOrderIds = new Set([
+    ...(session.orders || []).map((id) => String(id)),
+    ...(session.storeStops || []).map((stop) => String(stop.order)),
+  ]);
+  if (!sessionOrderIds.has(String(oid))) {
+    const err = new Error("الطلب غير مرتبط بجلسة التوصيل");
+    err.status = 404;
+    throw err;
+  }
+
+  const order = await Order.findById(oid)
+    .select("orderNumber verificationCode customerName items")
+    .lean();
+  if (!order) {
+    const err = new Error("الطلب غير موجود");
+    err.status = 404;
+    throw err;
+  }
+
+  const snap = session.deliveryProofSnapshot || {};
+  const assigned = session.assignedDriver || {};
+  const stop = (session.storeStops || []).find((s) => String(s.order) === String(oid));
+  const company = session.deliveryCompany;
+
+  return {
+    sessionId: session._id,
+    orderId: order._id,
+    orderNumber: stop?.orderNumber || order.orderNumber || "",
+    customerName: snap.customerName || session.customerName || order.customerName || "",
+    verificationCode: stop?.verificationCode || snap.verificationCode || order.verificationCode || "",
+    driverName: snap.driverName || assigned.name || "",
+    companyName: snap.companyName || company?.name || "",
+    items: mapOrderItems(order.items),
+    photo: snap.photo || session.driverDeliveryProof || "",
+    note: snap.note || session.driverDeliveryNote || "",
+    deliveredAt: snap.deliveredAt || session.driverDeliveredAt || session.updatedAt,
+  };
 }
 
 async function getProofById(proofId, { companyId = null, includeCompany = true } = {}) {
@@ -231,7 +372,11 @@ async function listProofFilterOptions({ companyId = null } = {}) {
 
 module.exports = {
   formatProofCard,
+  expandSessionToOrderCards,
+  mapOrderItems,
   listProofs,
+  listProofOrders,
   getProofById,
+  getProofOrderDetail,
   listProofFilterOptions,
 };

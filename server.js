@@ -5,6 +5,7 @@ const express = require("express");
 const cors = require("cors");
 const helmet = require("helmet");
 const compression = require("compression");
+const { isExcelExportRequest } = require("./src/utils/excelDownload.util");
 const dotenv = require("dotenv");
 const bcrypt = require("bcryptjs");
 
@@ -128,7 +129,16 @@ app.use(cors({
     maxAge: 600,
     optionsSuccessStatus: 204,
 }));
-app.use(compression({ threshold: 1024, level: 6 }));
+app.use(compression({
+    threshold: 1024,
+    level: 6,
+    filter: (req, res) => {
+        if (isExcelExportRequest(req) || res.getHeader("X-No-Compression") === "1") {
+            return false;
+        }
+        return compression.filter(req, res);
+    },
+}));
 app.use(express.json({ limit: "3mb" }));
 app.use(requestLogMiddleware);
 

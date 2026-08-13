@@ -247,6 +247,95 @@ async function countUnconfirmedHandoversForMonth(companyId, monthKey) {
   return rows.filter((r) => r.needsReview).length;
 }
 
+async function listUnconfirmedHandoversForCompany(companyId, monthKey) {
+  const { getMonthBounds } = require("../utils/billingMonth.util");
+  const DeliveryCompanyDriver = require("../models/deliveryCompanyDriver");
+  const { start, end } = getMonthBounds(monthKey);
+
+  const handovers = await DeliveryCompanyOrderHandover.find({
+    deliveryCompany: companyId,
+    handoverAt: { $gte: start, $lt: end },
+    driverConfirmedAt: null,
+  })
+    .sort({ handoverAt: -1 })
+    .lean();
+
+  if (!handovers.length) return [];
+
+  const orderIds = handovers.map((h) => h.order);
+  const driverIds = [
+    ...new Set(handovers.map((h) => h.assignedDriverId).filter(Boolean).map(String)),
+  ];
+
+  const [orders, drivers, company] = await Promise.all([
+    Order.find({ _id: { $in: orderIds } })
+      .select("orderNumber status customerName createdAt")
+      .lean(),
+    driverIds.length
+      ? DeliveryCompanyDriver.find({ _id: { $in: driverIds } }).select("name").lean()
+      : [],
+    DeliveryCompany.findById(companyId).select("name").lean(),
+  ]);
+
+  const orderMap = new Map(orders.map((o) => [String(o._id), o]));
+  const driverMap = new Map(drivers.map((d) => [String(d._id), d]));
+  const companyName = company?.name || "";
+
+  return handovers
+    .filter((h) => {
+      const order = orderMap.get(String(h.order));
+      return order && handoverNeedsDriverReview(h, order.status);
+    })
+    .map((h) => {
+      const order = orderMap.get(String(h.order));
+      const driver = h.assignedDriverId
+        ? driverMap.get(String(h.assignedDriverId))
+        : null;
+      return {
+        handoverId: h._id,
+        orderId: h.order,
+        orderNumber: order?.orderNumber || "",
+        customerName: order?.customerName || "",
+        orderDate: order?.createdAt || h.handoverAt,
+        handoverAt: h.handoverAt,
+        driverName: driver?.name || "",
+        companyName,
+      };
+    });
+}
+
+async function countUnconfirmedHandoversByCompanies(companyIds, monthKey) {
+  if (!Array.isArray(companyIds) || !companyIds.length) return new Map();
+
+  const { getMonthBounds } = require("../utils/billingMonth.util");
+  const { start, end } = getMonthBounds(monthKey);
+
+  const handovers = await DeliveryCompanyOrderHandover.find({
+    deliveryCompany: { $in: companyIds },
+    handoverAt: { $gte: start, $lt: end },
+    driverConfirmedAt: null,
+  })
+    .select("order deliveryCompany assignedDriverId driverConfirmedAt")
+    .lean();
+
+  if (!handovers.length) return new Map();
+
+  const orderIds = handovers.map((h) => h.order);
+  const orders = await Order.find({ _id: { $in: orderIds } })
+    .select("status")
+    .lean();
+  const orderMap = new Map(orders.map((o) => [String(o._id), o]));
+
+  const counts = new Map();
+  for (const h of handovers) {
+    const order = orderMap.get(String(h.order));
+    if (!order || !handoverNeedsDriverReview(h, order.status)) continue;
+    const key = String(h.deliveryCompany);
+    counts.set(key, (counts.get(key) || 0) + 1);
+  }
+  return counts;
+}
+
 module.exports = {
   HANDOVER_STATUS,
   REQUIRED_PREVIOUS_STATUS,
@@ -258,6 +347,8 @@ module.exports = {
   listDriverPendingConfirmations,
   listAdminHandoversForMonth,
   countUnconfirmedHandoversForMonth,
+  listUnconfirmedHandoversForCompany,
+  countUnconfirmedHandoversByCompanies,
   handoverNeedsDriverReview,
   isLegacyDriverConfirmed,
 };

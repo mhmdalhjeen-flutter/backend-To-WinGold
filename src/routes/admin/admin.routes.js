@@ -103,6 +103,7 @@ router.post("/treasure-boxes", boxAdminController.createTreasureBox);
 router.get("/treasure-boxes",  boxAdminController.getTreasureBoxes);
 
 // ─── إحصائيات وتنبيهات ───────────────────────────────────────────────────────
+router.get("/dashboard/summary", dashboardController.getDashboardSummary);
 router.get("/dashboard", dashboardController.getDashboard);
 router.get("/dashboard/users-by-region", dashboardController.getUsersByRegion);
 router.get("/dashboard/stores-by-region", dashboardController.getStoresByRegion);
@@ -499,7 +500,9 @@ router.post("/delivery-companies/:id/portal-account", deliveryCompanyAdmin.creat
 router.put("/delivery-companies/:id/portal-account", deliveryCompanyAdmin.updatePortalAccount);
 
 router.get("/delivery-proofs", deliveryProofAdmin.list);
+router.get("/delivery-proofs/orders", deliveryProofAdmin.listOrders);
 router.get("/delivery-proofs/filter-options", deliveryProofAdmin.filterOptions);
+router.get("/delivery-proofs/:sessionId/orders/:orderId", deliveryProofAdmin.getOrderDetail);
 router.get("/delivery-proofs/:id", deliveryProofAdmin.getOne);
 
 // ─── اشتراك المتاجر الشهري ───────────────────────────────────────────────────

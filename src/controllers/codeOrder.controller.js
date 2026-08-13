@@ -7,6 +7,7 @@ const storeCardInventoryService = require("../services/storeCardInventory.servic
 const crypto    = require("crypto");
 const { generatePromoCodeString } = require("../utils/promoCode.util");
 const { buildGiftCodesExcelBuffer, buildGiftCodesExportFilename } = require("../utils/giftCodeExcelExport.util");
+const { sendExcelDownload } = require("../utils/excelDownload.util");
 const { CARD_SOURCES } = require("../constants/storeSubscription.constants");
 const { assertNoMongoOperators, cleanString, intInRange, requireObjectId } = require("../utils/inputSecurity.util");
 const { safeLog } = require("../utils/logSanitize.util");
@@ -247,34 +248,45 @@ exports.exportOrderCodes = async (req, res) => {
     try {
         const id = requireObjectId(req.params.id, "id");
         const order = await CodeOrder.findById(id)
-            .populate({ path: "codes", model: "PromoCode" })
+            .populate("store", "name")
             .populate("cardType", "name points")
-            .populate("store", "name");
+            .lean();
 
         if (!order) return res.status(404).json({ message: "الطلب غير موجود" });
-        if (order.deliveryType === "digital")
+        if (order.deliveryType === "digital") {
             return res.status(400).json({ message: "الطلبات الرقمية لا تتطلب تصدير Excel" });
-        if (!order.codes || order.codes.length === 0)
+        }
+        if (!Array.isArray(order.codes) || order.codes.length === 0) {
             return res.status(400).json({ message: "لا توجد أكواد لهذا الطلب" });
+        }
 
+        const promoCodes = await PromoCode.find({ _id: { $in: order.codes } })
+            .select("code cardSource")
+            .lean();
+
+        const promoById = new Map(promoCodes.map((row) => [String(row._id), row]));
         const storeName = order.store?.name || "";
-        const codes = order.codes.map((promoCode) => ({
-            code: promoCode.code,
-            source: promoCode.cardSource || CARD_SOURCES.INDEPENDENT,
-        }));
+        const codes = order.codes
+            .map((codeId) => promoById.get(String(codeId)))
+            .filter(Boolean)
+            .map((promoCode) => ({
+                code: promoCode.code,
+                source: promoCode.cardSource || CARD_SOURCES.INDEPENDENT,
+            }))
+            .filter((row) => row.code);
+
         const xlsxBuffer = await buildGiftCodesExcelBuffer({ codes, storeName });
-
-        res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
-        res.setHeader("Content-Disposition", `attachment; filename="${buildGiftCodesExportFilename(storeName)}"`);
-        res.send(xlsxBuffer);
-
+        sendExcelDownload(res, xlsxBuffer, buildGiftCodesExportFilename(storeName));
     } catch (err) {
         safeLog("error", "code_order_export_failed", {
             message: err.message,
             stack: err.stack,
             userId: req.user?.id,
+            orderId: req.params?.id,
         });
-        res.status(500).json({ message: "تعذّر تصدير الأكواد" });
+        res.status(err.status || 500).json({
+            message: err.message || "تعذّر تصدير الأكواد",
+        });
     }
 };
 
@@ -366,11 +378,13 @@ exports.exportDirectPhysicalCodes = async (req, res) => {
             storeName: storeDoc.name,
         });
 
-        res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
-        res.setHeader("Content-Disposition", `attachment; filename="${buildGiftCodesExportFilename(storeDoc.name)}"`);
-        res.send(xlsxBuffer);
+        sendExcelDownload(res, xlsxBuffer, buildGiftCodesExportFilename(storeDoc.name));
     } catch (err) {
-        safeLog("error", "direct_physical_export_failed", { message: err.message, userId: req.user?.id });
-        res.status(500).json({ message: "تعذّر تصدير Excel" });
+        safeLog("error", "direct_physical_export_failed", {
+            message: err.message,
+            stack: err.stack,
+            userId: req.user?.id,
+        });
+        res.status(err.status || 500).json({ message: err.message || "تعذّر تصدير Excel" });
     }
 };

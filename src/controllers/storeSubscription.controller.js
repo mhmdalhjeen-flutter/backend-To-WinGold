@@ -60,18 +60,14 @@ exports.exportMySubscriptionPaperCodes = async (req, res) => {
     }
 
     const { buildGiftCodesExcelBuffer, buildGiftCodesExportFilename } = require("../utils/giftCodeExcelExport.util");
+    const { sendExcelDownload } = require("../utils/excelDownload.util");
     const exportData = await storeSubscriptionService.getSubscriptionPaperCodesForExport(status.period._id);
     const xlsxBuffer = await buildGiftCodesExcelBuffer({
       codes: exportData.codes,
       storeName: exportData.storeName,
     });
 
-    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
-    res.setHeader(
-      "Content-Disposition",
-      `attachment; filename="${buildGiftCodesExportFilename(exportData.storeName)}"`,
-    );
-    res.send(xlsxBuffer);
+    sendExcelDownload(res, xlsxBuffer, buildGiftCodesExportFilename(exportData.storeName));
   } catch (err) {
     res.status(err.status || 500).json({ message: err.message });
   }

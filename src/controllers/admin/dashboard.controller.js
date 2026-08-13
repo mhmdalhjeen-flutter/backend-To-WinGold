@@ -127,6 +127,18 @@ async function getGrowth(days) {
   return { users, stores, offers, days };
 }
 
+exports.getDashboardSummary = async (_req, res) => {
+  try {
+    const cards = await adminDashboard.getSummaryCards();
+    res.status(200).json({
+      cards,
+      generatedAt: new Date().toISOString(),
+    });
+  } catch (error) {
+    res.status(500).json({ message: "خطأ في جلب ملخص لوحة التحكم", error: error.message });
+  }
+};
+
 exports.getDashboard = async (req, res) => {
   try {
     const days = Math.min(Math.max(parseInt(req.query.days, 10) || DEFAULT_DAYS, 7), 90);

@@ -428,6 +428,12 @@ async function listAdminBillingCards(date = new Date()) {
     .lean();
 
   const companyIds = companies.map((c) => c._id);
+  const handoverService = require("./deliveryCompanyHandover.service");
+  const unconfirmedByCompany = await handoverService.countUnconfirmedHandoversByCompanies(
+    companyIds,
+    currentMonthKey,
+  );
+
   const allPeriods = await DeliveryCompanyBillingPeriod.find({
     deliveryCompany: { $in: companyIds },
     $or: [
@@ -468,10 +474,15 @@ async function listAdminBillingCards(date = new Date()) {
       const billCount = billPeriod?.deliveredOrderCount ?? 0;
       const billPrice = billPeriod?.pricePerOrder ?? Number(company.pricePerDeliveredOrder ?? DEFAULT_PRICE_PER_ORDER);
       const billTotal = billPeriod?.amountDue ?? computeAmountDue(billCount, billPrice);
+      const currentMonthOrderCount = currentPeriod?.deliveredOrderCount ?? 0;
+      const unconfirmedHandoverCount = unconfirmedByCompany.get(String(company._id)) || 0;
 
       return {
         company,
         pricePerOrder: Number(company.pricePerDeliveredOrder ?? DEFAULT_PRICE_PER_ORDER),
+        currentMonthOrderCount,
+        unconfirmedHandoverCount,
+        hasUnconfirmedHandovers: unconfirmedHandoverCount > 0,
         currentPeriod: serializePeriod(currentPeriod),
         previousPeriod: serializePeriod(previousPeriod),
         openPeriod: serializePeriod(openPeriod),
