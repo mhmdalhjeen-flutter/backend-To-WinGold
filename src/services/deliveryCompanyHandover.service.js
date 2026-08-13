@@ -125,13 +125,25 @@ async function recordStoreHandoverToDeliveryCompany(orderId, {
 
   try {
     const deliveryCompanyBillingService = require("./deliveryCompanyBilling.service");
-    await deliveryCompanyBillingService.incrementHandoverCount(companyId, handoverAt);
+    const billingResult = await deliveryCompanyBillingService.incrementHandoverCount(companyId, handoverAt);
+    if (!billingResult?.incremented) {
+      const reason = billingResult?.reason || "unknown";
+      const logLevel = reason === "period_closed" || reason === "billing_frozen" ? "info" : "warn";
+      safeLog(logLevel, "delivery_billing_increment_not_applied", {
+        companyId: String(companyId),
+        orderId: String(orderId),
+        reason,
+        monthKey: billingResult?.monthKey,
+      });
+    }
   } catch (billingErr) {
-    safeLog("warn", "delivery_billing_increment_failed", {
+    safeLog("error", "delivery_billing_increment_failed", {
       message: billingErr.message,
       companyId: String(companyId),
       orderId: String(orderId),
+      status: billingErr.status || 500,
     });
+    throw billingErr;
   }
 
   return { recorded: true, companyId, handoverAt };

@@ -171,6 +171,20 @@ test("repeating the same handover request does not increase count again", async 
   assert.equal(handoverCounts.get(String(companyA)), 1);
 });
 
+test("concurrent duplicate handover insert (E11000) is treated as already recorded", async () => {
+  resetState();
+  const results = await Promise.all([
+    recordStoreHandoverToDeliveryCompany(order1, { previousStatus: REQUIRED_PREVIOUS_STATUS }),
+    recordStoreHandoverToDeliveryCompany(order1, { previousStatus: REQUIRED_PREVIOUS_STATUS }),
+  ]);
+  const recorded = results.filter((r) => r.recorded);
+  const duplicates = results.filter((r) => !r.recorded);
+  assert.equal(recorded.length, 1);
+  assert.equal(duplicates.length, 1);
+  assert.equal(duplicates[0].reason, "duplicate");
+  assert.equal(handoverCounts.get(String(companyA)), 1);
+});
+
 test("different order handed to Company A → Company A count +1", async () => {
   resetState();
   await recordStoreHandoverToDeliveryCompany(order1, {

@@ -10,6 +10,7 @@ const dotenv = require("dotenv");
 const bcrypt = require("bcryptjs");
 
 const connectDB = require("./src/config/db");
+const { validateStartupEnv } = require("./src/config/validateEnv");
 const { connectRedis } = require("./src/config/redis");
 const { ensureSchemaIndexes } = require("./src/config/syncIndexes");
 const User = require("./src/models/user");
@@ -43,13 +44,14 @@ const { logVapidStartupStatus } = require("./src/config/vapid");
 
 dotenv.config();
 
-if (!process.env.JWT_SECRET) {
-    safeLog("error", "startup_config_error", { message: "JWT_SECRET is required" });
-    process.exit(1);
-}
+validateStartupEnv();
 
 const app = express();
-const isProduction = process.env.NODE_ENV === "production";
+const nodeEnv = process.env.NODE_ENV || "development";
+const isProduction = nodeEnv === "production";
+const isStaging = nodeEnv === "staging";
+const isDevelopment = !isProduction && !isStaging;
+const isStrictCors = isProduction || isStaging;
 
 app.disable("x-powered-by");
 
@@ -90,8 +92,8 @@ const allowedOrigins = [...new Set([
 
 if (envOrigins.length === 0) {
     const message = "CORS_ORIGINS غير مضبوط";
-    if (isProduction) {
-        safeLog("warn", "startup_config_warning", { message, mode: "production", behavior: "production frontend origins rejected unless listed in CORS_ORIGINS" });
+    if (isStrictCors) {
+        safeLog("warn", "startup_config_warning", { message, mode: nodeEnv, behavior: "only DEFAULT_PROD_ORIGINS and localhost are not auto-allowed for unknown origins" });
     } else {
         safeLog("warn", "startup_config_warning", { message, mode: "development", behavior: "localhost origins allowed" });
     }
@@ -115,10 +117,10 @@ app.use(cors({
         if (allowedOrigins.includes(origin)) {
             return cb(null, true);
         }
-        if (!isProduction && LOCALHOST_ORIGIN_RE.test(origin)) {
+        if (isDevelopment && LOCALHOST_ORIGIN_RE.test(origin)) {
             return cb(null, true);
         }
-        if (!isProduction && envOrigins.length === 0) {
+        if (isDevelopment && envOrigins.length === 0) {
             return cb(null, true);
         }
         return cb(new Error("Origin not allowed by CORS"));

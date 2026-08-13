@@ -18,7 +18,7 @@ const { processOptionalImage } = require("../utils/imageProcess.util");
 const { requireObjectId, cleanString } = require("../utils/inputSecurity.util");
 const { normalizeLocalPhone, isValidLocalPhone } = require("../utils/phone.util");
 
-const DRIVER_REG_TOKEN_SECRET = process.env.JWT_SECRET || "offers-tech-driver-reg";
+const { getJwtSecret } = require("../utils/jwtOptions.util");
 const DRIVER_REG_TOKEN_TTL = "30m";
 
 const ACTIVE_DRIVER_SESSION_STATUSES = new Set([
@@ -86,7 +86,7 @@ async function verifyDriverRegistrationPassword(registrationPassword) {
 
   const registrationToken = jwt.sign(
     { companyId: String(matched._id), purpose: "driver_registration" },
-    DRIVER_REG_TOKEN_SECRET,
+    getJwtSecret(),
     { expiresIn: DRIVER_REG_TOKEN_TTL },
   );
 
@@ -116,7 +116,7 @@ async function registerDriver({ registrationToken, name, phone, password, confir
 
   let payload;
   try {
-    payload = jwt.verify(registrationToken, DRIVER_REG_TOKEN_SECRET);
+    payload = jwt.verify(registrationToken, getJwtSecret());
   } catch (_) {
     const err = new Error("انتهت صلاحية التسجيل — أعد إدخال كلمة مرور الشركة");
     err.status = 400;

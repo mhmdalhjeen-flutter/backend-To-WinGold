@@ -17,8 +17,14 @@ const { getMonthBounds, formatMonthLabel } = require("../utils/billingMonth.util
 const { parseSubscriptionPaymentSubmission, serializePaymentForOwner } = require("../utils/storeSubscriptionPayment.util");
 const billingNotification = require("./deliveryCompanyBillingNotification.service");
 const { getPaymentTypeLabel } = require("../utils/paymentMethodTypes.util");
+const { safeLog } = require("../utils/logSanitize.util");
 
 const CLOSED_SET = new Set(CLOSED_BILLING_STATUSES);
+const BILLING_INCREMENT_MAX_ATTEMPTS = 3;
+
+function isMongoDuplicateKeyError(err) {
+  return err?.code === 11000;
+}
 
 function computeAmountDue(count, pricePerOrder) {
   return Math.max(0, Number(count || 0) * Number(pricePerOrder || 0));
@@ -71,22 +77,43 @@ async function findOrCreateCountingPeriod(companyId, monthKey, session = null) {
     ...(session ? { session } : {}),
   };
 
-  return DeliveryCompanyBillingPeriod.findOneAndUpdate(
-    { deliveryCompany: companyId, monthKey },
-    {
-      $setOnInsert: {
-        deliveryCompany: companyId,
-        monthKey,
-        status: BILLING_STATUSES.COUNTING,
-        deliveredOrderCount: 0,
-        pricePerOrder,
-        amountDue: 0,
-        currency,
-        closedAt: null,
+  try {
+    const created = await DeliveryCompanyBillingPeriod.findOneAndUpdate(
+      { deliveryCompany: companyId, monthKey },
+      {
+        $setOnInsert: {
+          deliveryCompany: companyId,
+          monthKey,
+          status: BILLING_STATUSES.COUNTING,
+          deliveredOrderCount: 0,
+          pricePerOrder,
+          amountDue: 0,
+          currency,
+          closedAt: null,
+        },
       },
-    },
-    opts,
-  );
+      opts,
+    );
+    if (created) return created;
+  } catch (err) {
+    if (!isMongoDuplicateKeyError(err)) throw err;
+    safeLog("info", "delivery_billing_period_race_resolved", {
+      companyId: String(companyId),
+      monthKey,
+    });
+  }
+
+  const period = await findBillingPeriod(companyId, monthKey, session);
+  if (!period) {
+    const err = new Error("فشل إنشاء فترة الفوترة");
+    err.status = 500;
+    safeLog("error", "delivery_billing_period_create_failed", {
+      companyId: String(companyId),
+      monthKey,
+    });
+    throw err;
+  }
+  return period;
 }
 
 async function ensureCountingPeriod(companyId, monthKey, session = null) {
@@ -103,31 +130,74 @@ async function incrementHandoverCount(companyId, handoverAt = new Date()) {
   if (!companyId) return { incremented: false, reason: "no_company" };
 
   const monthKey = getCurrentMonthKey(handoverAt);
-  const period = await DeliveryCompanyBillingPeriod.findOne({
-    deliveryCompany: companyId,
+
+  for (let attempt = 1; attempt <= BILLING_INCREMENT_MAX_ATTEMPTS; attempt += 1) {
+    const period = await DeliveryCompanyBillingPeriod.findOne({
+      deliveryCompany: companyId,
+      monthKey,
+    });
+
+    if (period && CLOSED_SET.has(period.status)) {
+      return { incremented: false, reason: "period_closed" };
+    }
+
+    if (period && period.status !== BILLING_STATUSES.COUNTING) {
+      return { incremented: false, reason: "billing_frozen" };
+    }
+
+    let countingPeriod = period;
+    try {
+      countingPeriod = period || await ensureCountingPeriod(companyId, monthKey);
+    } catch (err) {
+      if (!isMongoDuplicateKeyError(err)) throw err;
+      safeLog("info", "delivery_billing_period_race_resolved", {
+        companyId: String(companyId),
+        monthKey,
+        phase: "increment_ensure",
+        attempt,
+      });
+      countingPeriod = await findBillingPeriod(companyId, monthKey);
+      if (!countingPeriod) throw err;
+    }
+
+    if (CLOSED_SET.has(countingPeriod.status)) {
+      return { incremented: false, reason: "period_closed" };
+    }
+    if (countingPeriod.status !== BILLING_STATUSES.COUNTING) {
+      return { incremented: false, reason: "billing_frozen" };
+    }
+
+    const result = await DeliveryCompanyBillingPeriod.updateOne(
+      { _id: countingPeriod._id, status: BILLING_STATUSES.COUNTING },
+      { $inc: { deliveredOrderCount: 1 } },
+    );
+
+    if (result.modifiedCount > 0) {
+      return {
+        incremented: true,
+        periodId: countingPeriod._id,
+        monthKey,
+      };
+    }
+
+    if (attempt < BILLING_INCREMENT_MAX_ATTEMPTS) {
+      safeLog("warn", "delivery_billing_increment_retry", {
+        companyId: String(companyId),
+        monthKey,
+        periodId: String(countingPeriod._id),
+        attempt,
+      });
+    }
+  }
+
+  safeLog("error", "delivery_billing_increment_failed", {
+    companyId: String(companyId),
     monthKey,
+    attempts: BILLING_INCREMENT_MAX_ATTEMPTS,
   });
-
-  if (period && CLOSED_SET.has(period.status)) {
-    return { incremented: false, reason: "period_closed" };
-  }
-
-  if (period && period.status !== BILLING_STATUSES.COUNTING) {
-    return { incremented: false, reason: "billing_frozen" };
-  }
-
-  const countingPeriod = period || await ensureCountingPeriod(companyId, monthKey);
-
-  const result = await DeliveryCompanyBillingPeriod.updateOne(
-    { _id: countingPeriod._id, status: BILLING_STATUSES.COUNTING },
-    { $inc: { deliveredOrderCount: 1 } },
-  );
-
-  return {
-    incremented: result.modifiedCount > 0,
-    periodId: countingPeriod._id,
-    monthKey,
-  };
+  const err = new Error("فشل زيادة عداد الفوترة");
+  err.status = 500;
+  throw err;
 }
 
 async function finalizePeriodForBilling(periodDoc) {

@@ -29,13 +29,15 @@ const deliveryCompanyAdmin = require("../../controllers/admin/delivery-company-a
 const deliveryProofAdmin = require("../../controllers/admin/delivery-proof-admin.controller");
 const storeSubscriptionAdmin = require("../../controllers/admin/store-subscription-admin.controller");
 const deliveryBillingAdmin = require("../../controllers/admin/delivery-billing-admin.controller");
-const monthlyCycleSimulationAdmin = require("../../controllers/admin/monthly-cycle-simulation.controller");
 const auditController = require("../../controllers/admin/audit.controller");
 const adminSensitiveController = require("../../controllers/admin-sensitive.controller");
 const adminAuditMiddleware = require("../../middleware/adminAudit.middleware");
-const { requireObjectId } = require("../../utils/inputSecurity.util");
+const sensitiveAuth = require("../../middleware/sensitiveAuth.middleware");
+const { requireObjectId, intInRange } = require("../../utils/inputSecurity.util");
 
 const ADMIN_STORE_LIST_SELECT = "name phone whatsapp region subRegion regionId subRegionId category logo isActive isVerifiedStore displayPriority owner cards bypassCards subscriptionActive createdAt";
+const ADMIN_STORE_PAGE_DEFAULT = 100;
+const ADMIN_STORE_PAGE_MAX = 200;
 const ADMIN_PRODUCT_LIST_SELECT = "name description price currency wholesalePrice isWholesale minOrderQuantity image stock freeDelivery isActive displayPriority createdAt";
 const ADMIN_OFFER_LIST_SELECT = "title description offerType value originalPrice finalPrice currency image freeDelivery isActive priority featuredPriority displayPriority expiresAt createdAt";
 
@@ -75,21 +77,21 @@ router.get("/audit/activity", auditController.getActivityLogs);
 router.get("/audit/login", auditController.getLoginLogs);
 router.get("/audit/security", auditController.getSecurityLogs);
 router.get("/audit/filters", auditController.getAuditFilters);
-router.get("/audit/export", auditController.exportLogs);
+router.get("/audit/export", sensitiveAuth, auditController.exportLogs);
 router.get("/audit/:id", auditController.getLogById);
 router.get("/activity-logs", auditController.getActivityLogs);
 router.get("/security-logs", auditController.getSecurityLogs);
 
 // ─── أكواد التفعيل ───────────────────────────────────────────────────────────
-router.post("/create-code",          roleMiddleware(["admin"]), createStoreActivationCode);
-router.post("/create-code-business", roleMiddleware(["admin"]), createCodeBusiness);
+router.post("/create-code",          roleMiddleware(["admin"]), sensitiveAuth, createStoreActivationCode);
+router.post("/create-code-business", roleMiddleware(["admin"]), sensitiveAuth, createCodeBusiness);
 router.get("/activation-keys",       listActivationKeys);
-router.delete("/activation-keys/:id", adminMiddleware, deleteActivationKey);
+router.delete("/activation-keys/:id", adminMiddleware, sensitiveAuth, deleteActivationKey);
 
 // ─── أكواد الأدمن (نقاط — بدون متجر) ───────────────────────────────────────
-router.post("/admin-codes/generate", roleMiddleware(["admin"]), generateAdminCodes);
+router.post("/admin-codes/generate", roleMiddleware(["admin"]), sensitiveAuth, generateAdminCodes);
 router.get("/admin-codes", listAdminCodes);
-router.delete("/admin-codes/:id", adminMiddleware, deleteAdminCode);
+router.delete("/admin-codes/:id", adminMiddleware, sensitiveAuth, deleteAdminCode);
 
 // ─── إعدادات النظام ──────────────────────────────────────────────────────────
 router.post("/settings/home-video", adminController.updateSystemSettings);
@@ -120,18 +122,18 @@ router.get("/users/count",           adminController.getUsersCount);
 router.patch("/users/update-manual", adminController.updateUserManually);
 router.get("/users",                 usersAdmin.listUsers);
 router.get("/users/:id",             usersAdmin.getUserDetail);
-router.delete("/users/:id",          adminMiddleware, adminController.deleteUser);
-router.patch("/users/:id/ban",       adminMiddleware, adminController.banUser);
+router.delete("/users/:id",          adminMiddleware, sensitiveAuth, adminController.deleteUser);
+router.patch("/users/:id/ban",       adminMiddleware, sensitiveAuth, adminController.banUser);
 
 // ─── أكواد التفعيل ───────────────────────────────────────────────────────────
-router.post("/activation-code",       adminController.generateBulkCodes);
-router.post("/generate-bulk-codes",   adminController.generateBulkCodes);
-router.post("/codes/generate",        adminController.generateBulkCodes);
+router.post("/activation-code",       sensitiveAuth, adminController.generateBulkCodes);
+router.post("/generate-bulk-codes",   sensitiveAuth, adminController.generateBulkCodes);
+router.post("/codes/generate",        sensitiveAuth, adminController.generateBulkCodes);
 router.get("/codes",                  adminController.getAllCodes);
 router.get("/check-code/:code",       adminController.checkCode);
 router.get("/code",                   adminController.getCodes);
-router.delete("/codes/:id",           adminMiddleware, adminController.deleteCode);
-router.post("/codes/delete-bulk",     adminMiddleware, adminController.deleteBulkCodes);
+router.delete("/codes/:id",           adminMiddleware, sensitiveAuth, adminController.deleteCode);
+router.post("/codes/delete-bulk",     adminMiddleware, sensitiveAuth, adminController.deleteBulkCodes);
 
 // ─── التصنيفات ───────────────────────────────────────────────────────────────
 router.get("/categories",  adminController.getCategories);
@@ -140,11 +142,11 @@ router.post("/categories", adminController.addCategory);
 // ─── السحوبات ────────────────────────────────────────────────────────────────
 router.get("/draws",                adminController.getAllDraws);
 router.post("/draws",               adminController.createDraw);
-router.patch("/draws/:drawId/approve", adminController.approveDraw);
-router.post("/draws/:drawId/draw-winners", adminController.drawWinners);
+router.patch("/draws/:drawId/approve", sensitiveAuth, adminController.approveDraw);
+router.post("/draws/:drawId/draw-winners", sensitiveAuth, adminController.drawWinners);
 
 // ─── سجل النشاطات ────────────────────────────────────────────────────────────
-router.get("/activity-logs", adminController.getActivityLogs);
+// Canonical: GET /activity-logs → auditController (registered above with /audit/activity)
 
 // =============================================================================
 // من هنا: endpoints الأدمن الجديدة (تطبق adminMiddleware على كل ما يليها)
@@ -156,21 +158,50 @@ router.use(adminMiddleware);
 // الفرونت يفرق بين store وsupplier عبر owner.role
 router.get('/stores', async (req, res) => {
     try {
-        const { type } = req.query; // type=store | type=supplier | فارغ = الكل
+        const { type } = req.query;
+        const explicitPagination = req.query.page != null || req.query.limit != null;
+        const page = explicitPagination
+            ? (intInRange(req.query.page, { field: "page", min: 1, max: 100000 }) ?? 1)
+            : 1;
+        const limit = explicitPagination
+            ? (intInRange(req.query.limit, {
+                field: "limit",
+                min: 1,
+                max: ADMIN_STORE_PAGE_MAX,
+            }) ?? ADMIN_STORE_PAGE_DEFAULT)
+            : ADMIN_STORE_PAGE_MAX;
 
-        // populate المالك مع role لأنه الأساس في التمييز بين متجر ومستودع
-        let stores = await Store.find()
+        const query = {};
+        if (type === 'supplier' || type === 'store') {
+            const owners = await User.find({ role: type }).select('_id').lean();
+            query.owner = { $in: owners.map((row) => row._id) };
+        }
+
+        const total = await Store.countDocuments(query);
+        const pages = Math.max(1, Math.ceil(total / limit) || 1);
+        const safePage = Math.min(page, pages);
+
+        const stores = await Store.find(query)
             .select(ADMIN_STORE_LIST_SELECT)
             .populate('owner', 'name email phone role')
             .sort({ createdAt: -1 })
+            .skip((safePage - 1) * limit)
+            .limit(limit)
             .lean();
 
-        // فلترة حسب نوع الحساب إذا طُلب
-        if (type === 'supplier' || type === 'store') {
-            stores = stores.filter(s => s.owner?.role === type);
+        const mapped = stores.map((s) => stripBase64ListImage(s, "logo"));
+        if (explicitPagination) {
+            return res.json({
+                stores: mapped,
+                total,
+                page: safePage,
+                pages,
+                limit,
+            });
         }
 
-        res.json(stores.map((s) => stripBase64ListImage(s, "logo")));
+        // Legacy contract: bare array (bounded to ADMIN_STORE_PAGE_MAX per request).
+        return res.json(mapped);
     } catch (err) {
         res.status(err.status || 500).json({ message: err.message });
     }
@@ -227,7 +258,7 @@ router.patch('/stores/:storeId/toggle-status', async (req, res) => {
 });
 
 // ─── DELETE /admin/stores/:storeId ───────────────────────────────────────────
-router.delete('/stores/:storeId', async (req, res) => {
+router.delete('/stores/:storeId', sensitiveAuth, async (req, res) => {
     try {
         const storeId = requireObjectId(req.params.storeId, "storeId");
         const store = await Store.findByIdAndDelete(storeId);
@@ -421,7 +452,7 @@ router.patch('/products/:productId/display-priority', async (req, res) => {
 });
 
 // ─── DELETE /admin/products/:productId ───────────────────────────────────────
-router.delete('/products/:productId', async (req, res) => {
+router.delete('/products/:productId', sensitiveAuth, async (req, res) => {
     try {
         const productId = requireObjectId(req.params.productId, "productId");
         const product = await Product.findByIdAndDelete(productId);
@@ -447,7 +478,7 @@ router.patch('/offers/:offerId/toggle', async (req, res) => {
 });
 
 // ─── DELETE /admin/offers/:offerId ───────────────────────────────────────────
-router.delete('/offers/:offerId', async (req, res) => {
+router.delete('/offers/:offerId', sensitiveAuth, async (req, res) => {
     try {
         const offerId = requireObjectId(req.params.offerId, "offerId");
         const offer = await Offer.findByIdAndDelete(offerId);
@@ -463,12 +494,12 @@ router.get("/bazaar", bazaarAdmin.list);
 router.get("/bazaar/:id", bazaarAdmin.getOne);
 router.patch("/bazaar/:id/approve", bazaarAdmin.approve);
 router.patch("/bazaar/:id/reject", bazaarAdmin.reject);
-router.delete("/bazaar/:id", bazaarAdmin.remove);
+router.delete("/bazaar/:id", sensitiveAuth, bazaarAdmin.remove);
 
 router.get("/achievements", achievementAdmin.list);
 router.post("/achievements", achievementAdmin.create);
 router.put("/achievements/:id", achievementAdmin.update);
-router.delete("/achievements/:id", achievementAdmin.remove);
+router.delete("/achievements/:id", sensitiveAuth, achievementAdmin.remove);
 router.patch("/achievements/reorder", achievementAdmin.reorder);
 
 // ─── إدارة أولويات العرض (سحب وإفلات) ───────────────────────────────────────
@@ -489,13 +520,13 @@ router.get("/delivery-companies", deliveryCompanyAdmin.list);
 router.post("/delivery-companies", deliveryCompanyAdmin.create);
 router.put("/delivery-companies/:id", deliveryCompanyAdmin.update);
 router.patch("/delivery-companies/:id/toggle", deliveryCompanyAdmin.toggle);
-router.delete("/delivery-companies/:id", deliveryCompanyAdmin.remove);
+router.delete("/delivery-companies/:id", sensitiveAuth, deliveryCompanyAdmin.remove);
 router.patch("/delivery-companies/:id/areas", deliveryCompanyAdmin.updateAreas);
 router.patch("/delivery-companies/:id/payment-methods", deliveryCompanyAdmin.updatePaymentMethods);
 router.get("/delivery-companies/:id/payment-accounts", deliveryCompanyAdmin.listPaymentAccounts);
 router.post("/delivery-companies/:id/payment-accounts", deliveryCompanyAdmin.createPaymentAccount);
 router.put("/delivery-companies/:id/payment-accounts/:accountId", deliveryCompanyAdmin.updatePaymentAccount);
-router.delete("/delivery-companies/:id/payment-accounts/:accountId", deliveryCompanyAdmin.deletePaymentAccount);
+router.delete("/delivery-companies/:id/payment-accounts/:accountId", sensitiveAuth, deliveryCompanyAdmin.deletePaymentAccount);
 router.post("/delivery-companies/:id/portal-account", deliveryCompanyAdmin.createPortalAccount);
 router.put("/delivery-companies/:id/portal-account", deliveryCompanyAdmin.updatePortalAccount);
 
@@ -507,31 +538,27 @@ router.get("/delivery-proofs/:id", deliveryProofAdmin.getOne);
 
 // ─── اشتراك المتاجر الشهري ───────────────────────────────────────────────────
 router.get("/store-subscriptions", storeSubscriptionAdmin.listSubscriptionCards);
-router.patch("/store-subscriptions/periods/:periodId/approve", storeSubscriptionAdmin.approveSubscriptionPayment);
-router.patch("/store-subscriptions/periods/:periodId/reject", storeSubscriptionAdmin.rejectSubscriptionPayment);
-router.patch("/store-subscriptions/stores/:storeId/exempt", storeSubscriptionAdmin.exemptStoreSubscription);
-router.post("/store-subscriptions/exempt-all-except", storeSubscriptionAdmin.exemptAllExcept);
+router.patch("/store-subscriptions/periods/:periodId/approve", sensitiveAuth, storeSubscriptionAdmin.approveSubscriptionPayment);
+router.patch("/store-subscriptions/periods/:periodId/reject", sensitiveAuth, storeSubscriptionAdmin.rejectSubscriptionPayment);
+router.patch("/store-subscriptions/stores/:storeId/exempt", sensitiveAuth, storeSubscriptionAdmin.exemptStoreSubscription);
+router.post("/store-subscriptions/exempt-all-except", sensitiveAuth, storeSubscriptionAdmin.exemptAllExcept);
 router.patch("/store-subscriptions/stores/:storeId/card-quantities", storeSubscriptionAdmin.setStoreCardQuantities);
-router.get("/store-subscriptions/periods/:periodId/export-paper-codes", storeSubscriptionAdmin.exportSubscriptionPaperCodes);
+router.get("/store-subscriptions/periods/:periodId/export-paper-codes", sensitiveAuth, storeSubscriptionAdmin.exportSubscriptionPaperCodes);
 router.get("/store-subscriptions/stores/:storeId/contact", storeSubscriptionAdmin.getStoreOwnerContact);
 
 router.get("/subscription-payment-methods", storeSubscriptionAdmin.listPlatformPaymentAccounts);
 router.post("/subscription-payment-methods", storeSubscriptionAdmin.createPlatformPaymentAccount);
 router.patch("/subscription-payment-methods/:accountId", storeSubscriptionAdmin.updatePlatformPaymentAccount);
 router.patch("/subscription-payment-methods/:accountId/activate", storeSubscriptionAdmin.activatePlatformPaymentAccount);
-router.delete("/subscription-payment-methods/:accountId", storeSubscriptionAdmin.deletePlatformPaymentAccount);
+router.delete("/subscription-payment-methods/:accountId", sensitiveAuth, storeSubscriptionAdmin.deletePlatformPaymentAccount);
 
 // ─── اشتراك شركات التوصيل الشهري ─────────────────────────────────────────────
 router.get("/delivery-subscriptions", deliveryBillingAdmin.listBillingCards);
-router.patch("/delivery-subscriptions/periods/:periodId/approve", deliveryBillingAdmin.approveBillingPayment);
-router.patch("/delivery-subscriptions/periods/:periodId/reject", deliveryBillingAdmin.rejectBillingPayment);
-router.patch("/delivery-subscriptions/periods/:periodId/exempt", deliveryBillingAdmin.exemptBillingPeriod);
-router.patch("/delivery-subscriptions/companies/:companyId/price-per-order", deliveryBillingAdmin.setPricePerOrder);
+router.patch("/delivery-subscriptions/periods/:periodId/approve", sensitiveAuth, deliveryBillingAdmin.approveBillingPayment);
+router.patch("/delivery-subscriptions/periods/:periodId/reject", sensitiveAuth, deliveryBillingAdmin.rejectBillingPayment);
+router.patch("/delivery-subscriptions/periods/:periodId/exempt", sensitiveAuth, deliveryBillingAdmin.exemptBillingPeriod);
+router.patch("/delivery-subscriptions/companies/:companyId/price-per-order", sensitiveAuth, deliveryBillingAdmin.setPricePerOrder);
 router.get("/delivery-subscriptions/companies/:companyId/history", deliveryBillingAdmin.getCompanyBillingHistory);
 router.get("/delivery-subscriptions/companies/:companyId/handovers", deliveryBillingAdmin.getCompanyHandovers);
-
-// ─── محاكاة دورة شهرية (اختبار — أدمن فقط) ─────────────────────────────────
-router.get("/monthly-cycle-simulation/status", monthlyCycleSimulationAdmin.getSimulationStatus);
-router.post("/monthly-cycle-simulation/run", monthlyCycleSimulationAdmin.runMonthlyCycleSimulation);
 
 module.exports = router;

@@ -17,6 +17,9 @@ const {
   normalizeStatus,
 } = require("../utils/orderStatus.util");
 const deliveryCompanyHandoverService = require("./deliveryCompanyHandover.service");
+const DeliverySession = require("../models/deliverySession");
+const DeliveryCompanyDriver = require("../models/deliveryCompanyDriver");
+const { normalizeLocalPhone } = require("../utils/phone.util");
 
 const ORDER_LIST_SELECT =
   "orderNumber verificationCode containerId containerName customer store customerName customerPhone storeName items subtotal total totalAmount currency status customerNotes storeNotes deliveryMethod deliveryAddress deliveryNotes paymentMethod paymentProof paymentProofImage transferInformation transferName transferPhone transferNumber paymentNotes rejectionReason paymentStatus pointsAwarded rewardPointsAwarded consumedCardType cardDeducted deliveryGroup confirmedAt completedAt deleteAfter statusTimeline modificationRequest orderChangeHistory originalTotal additionalPaymentAmount additionalPayment paymentTransactions createdAt updatedAt";
@@ -280,6 +283,106 @@ async function getAdminOrderById(orderId) {
   return order;
 }
 
+function orderAccessDenied(message = "غير مصرح") {
+  const err = new Error(message);
+  err.status = 403;
+  return err;
+}
+
+function orderCustomerId(order) {
+  return order.customer?._id?.toString?.() || order.customer?.toString?.() || "";
+}
+
+function orderStoreId(order) {
+  return order.store?._id?.toString?.() || order.store?.toString?.() || "";
+}
+
+async function resolveDriverAssignmentIdsForUser(userId) {
+  const user = await User.findById(userId).select("deliveryDriverId").lean();
+  let driver = null;
+  if (user?.deliveryDriverId) {
+    driver = await DeliveryCompanyDriver.findById(user.deliveryDriverId)
+      .select("_id deliveryCompany phone")
+      .lean();
+  }
+  if (!driver) {
+    driver = await DeliveryCompanyDriver.findOne({ userId })
+      .select("_id deliveryCompany phone")
+      .lean();
+  }
+  if (!driver) return null;
+
+  const companyDrivers = await DeliveryCompanyDriver.find({ deliveryCompany: driver.deliveryCompany })
+    .select("_id phone")
+    .lean();
+  const myPhone = normalizeLocalPhone(driver.phone);
+  const siblingIds = companyDrivers
+    .filter((row) => normalizeLocalPhone(row.phone) === myPhone)
+    .map((row) => row._id);
+  return siblingIds.length ? siblingIds : [driver._id];
+}
+
+async function assertOrderDetailAccess(requester, order) {
+  const role = requester.role;
+  const userId = requester.id?.toString?.() || String(requester._id);
+
+  if (role === "admin") {
+    return;
+  }
+
+  if (role === "customer") {
+    if (orderCustomerId(order) !== userId) {
+      throw orderAccessDenied();
+    }
+    return;
+  }
+
+  if (role === "store" || role === "supplier") {
+    const store = await Store.findOne({ owner: userId }).select("_id");
+    if (!store || orderStoreId(order) !== store._id.toString()) {
+      throw orderAccessDenied();
+    }
+    return;
+  }
+
+  if (role === "delivery_company") {
+    const user = await User.findById(userId).select("deliveryCompanyId").lean();
+    const companyId = user?.deliveryCompanyId;
+    if (!companyId) {
+      throw orderAccessDenied();
+    }
+    const session = await DeliverySession.findOne({
+      orders: order._id,
+      deliveryCompany: companyId,
+    })
+      .select("_id")
+      .lean();
+    if (!session) {
+      throw orderAccessDenied();
+    }
+    return;
+  }
+
+  if (role === "delivery_driver") {
+    const driverIds = await resolveDriverAssignmentIdsForUser(userId);
+    if (!driverIds?.length) {
+      throw orderAccessDenied();
+    }
+    const session = await DeliverySession.findOne({
+      orders: order._id,
+      "assignedDriver.driverId": { $in: driverIds },
+    })
+      .select("_id")
+      .lean();
+    if (!session) {
+      throw orderAccessDenied();
+    }
+    return;
+  }
+
+  throw orderAccessDenied();
+}
+
 async function getOrderDetail(requester, orderId) {
   const order = await Order.findById(orderId)
     .select(ORDER_LIST_SELECT)
@@ -293,23 +396,7 @@ async function getOrderDetail(requester, orderId) {
     throw err;
   }
 
-  const role = requester.role;
-  const userId = requester.id?.toString?.() || String(requester._id);
-
-  if (role === "customer" && order.customer?._id?.toString() !== userId) {
-    const err = new Error("غير مصرح");
-    err.status = 403;
-    throw err;
-  }
-
-  if (role === "store" || role === "supplier") {
-    const store = await Store.findOne({ owner: userId }).select("_id");
-    if (!store || order.store?._id?.toString() !== store._id.toString()) {
-      const err = new Error("غير مصرح");
-      err.status = 403;
-      throw err;
-    }
-  }
+  await assertOrderDetailAccess(requester, order);
 
   return order;
 }

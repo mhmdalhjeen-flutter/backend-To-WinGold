@@ -13,6 +13,11 @@ const {
   isMonthKeyExpired,
 } = require("../utils/subscriptionMonth.util");
 const { parseSubscriptionPaymentSubmission } = require("../utils/storeSubscriptionPayment.util");
+const { safeLog } = require("../utils/logSanitize.util");
+
+function isMongoDuplicateKeyError(err) {
+  return err?.code === 11000;
+}
 
 function resolveStoreCardConfig(store) {
   const config = store?.subscriptionCardConfig || {};
@@ -107,19 +112,43 @@ async function setStoreCardQuantities(storeId, body = {}) {
   return resolveStoreCardConfig(store);
 }
 
-async function ensurePeriodForPayment(store, monthKey = getCurrentMonthKey()) {
-  let period = await StoreSubscriptionPeriod.findOne({ store: store._id, monthKey });
-  const cardConfig = resolveStoreCardConfig(store);
+async function findOrCreateStoreSubscriptionPeriod(storeId, monthKey, insertFields) {
+  let period = await StoreSubscriptionPeriod.findOne({ store: storeId, monthKey });
+  if (period) return period;
 
-  if (!period) {
+  try {
     period = await StoreSubscriptionPeriod.create({
-      store: store._id,
+      store: storeId,
       monthKey,
-      status: SUBSCRIPTION_STATUSES.PAYMENT_PENDING,
-      cardConfig,
+      ...insertFields,
     });
     return period;
+  } catch (err) {
+    if (!isMongoDuplicateKeyError(err)) throw err;
+    safeLog("info", "store_subscription_period_race_resolved", {
+      storeId: String(storeId),
+      monthKey,
+    });
+    period = await StoreSubscriptionPeriod.findOne({ store: storeId, monthKey });
+    if (!period) {
+      const retryErr = new Error("فشل إنشاء فترة الاشتراك");
+      retryErr.status = 500;
+      safeLog("error", "store_subscription_period_create_failed", {
+        storeId: String(storeId),
+        monthKey,
+      });
+      throw retryErr;
+    }
+    return period;
   }
+}
+
+async function ensurePeriodForPayment(store, monthKey = getCurrentMonthKey()) {
+  const cardConfig = resolveStoreCardConfig(store);
+  let period = await findOrCreateStoreSubscriptionPeriod(store._id, monthKey, {
+    status: SUBSCRIPTION_STATUSES.PAYMENT_PENDING,
+    cardConfig,
+  });
 
   if (period.status === SUBSCRIPTION_STATUSES.ACTIVE || period.status === SUBSCRIPTION_STATUSES.EXEMPTED) {
     const err = new Error("الاشتراك الشهري مفعّل بالفعل");
@@ -268,9 +297,7 @@ async function exemptStoreForMonth(storeId, adminId, monthKey = getCurrentMonthK
   const cardConfig = resolveStoreCardConfig(store);
 
   if (!period) {
-    period = await StoreSubscriptionPeriod.create({
-      store: storeId,
-      monthKey,
+    period = await findOrCreateStoreSubscriptionPeriod(storeId, monthKey, {
       status: SUBSCRIPTION_STATUSES.EXEMPTED,
       cardConfig,
       exemptedBy: adminId,
@@ -365,6 +392,42 @@ async function listAdminSubscriptionCards(monthKey = getCurrentMonthKey()) {
   });
 }
 
+function resolvePeriodStoreId(period) {
+  const store = period?.store;
+  if (!store) return null;
+  return store._id || store;
+}
+
+async function findSubscriptionPaperPromoCodes(period) {
+  const storeId = resolvePeriodStoreId(period);
+  const linkedIds = (period.paperCodeIds || [])
+    .map((id) => (id?._id ? id._id : id))
+    .filter(Boolean);
+
+  let codes = [];
+  if (linkedIds.length) {
+    codes = await PromoCode.find({ _id: { $in: linkedIds } })
+      .select("code cardSource subscriptionPeriodId")
+      .lean();
+  }
+
+  const usedFallback = codes.length === 0
+    && (linkedIds.length > 0 || Number(period.paperCardsIssued) > 0);
+
+  if (usedFallback && storeId) {
+    codes = await PromoCode.find({
+      store: storeId,
+      subscriptionPeriodId: period._id,
+      cardSource: CARD_SOURCES.SUBSCRIPTION,
+    })
+      .select("code cardSource subscriptionPeriodId")
+      .sort({ createdAt: 1 })
+      .lean();
+  }
+
+  return { codes, usedFallback };
+}
+
 async function getSubscriptionPaperCodesForExport(periodId) {
   const period = await StoreSubscriptionPeriod.findById(periodId)
     .populate("store", "name")
@@ -384,20 +447,20 @@ async function getSubscriptionPaperCodesForExport(periodId) {
     err.status = 400;
     throw err;
   }
-  if (!period.paperCodeIds?.length) {
-    const err = new Error("لا توجد أكواد ورقية لهذه الفترة — تأكد من إصدار الكروت بعد الاعتماد");
-    err.status = 400;
+
+  const { codes, usedFallback } = await findSubscriptionPaperPromoCodes(period);
+
+  if (!codes.length) {
+    const err = new Error("لا توجد أكواد ورقية محفوظة لهذه الفترة في قاعدة البيانات");
+    err.status = 404;
     throw err;
   }
 
-  const codes = await PromoCode.find({
-    _id: { $in: period.paperCodeIds },
-  }).select("code cardSource subscriptionPeriodId").lean();
-
-  if (!codes.length) {
-    const err = new Error("تعذّر العثور على أكواد الكروت الورقية في قاعدة البيانات");
-    err.status = 404;
-    throw err;
+  if (usedFallback) {
+    await StoreSubscriptionPeriod.updateOne(
+      { _id: period._id },
+      { $set: { paperCodeIds: codes.map((row) => row._id) } },
+    );
   }
 
   return {
@@ -438,4 +501,7 @@ module.exports = {
   expireEndedSubscriptionPeriods,
   listAdminSubscriptionCards,
   getSubscriptionPaperCodesForExport,
+  findSubscriptionPaperPromoCodes,
+  resolvePeriodStoreId,
+  findOrCreateStoreSubscriptionPeriod,
 };

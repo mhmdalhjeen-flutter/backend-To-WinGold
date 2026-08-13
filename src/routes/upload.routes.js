@@ -1,8 +1,23 @@
 const express = require("express");
+const authMiddleware = require("../middleware/auth.middleware");
+const roleMiddleware = require("../middleware/role.middleware");
 const { uploadSingle } = require("../middleware/upload.middleware");
 const { isCloudinaryConfigured } = require("../config/cloudinary");
 
 const router = express.Router();
+
+/** Roles that upload images through the shared Cloudinary endpoint. */
+const UPLOAD_ALLOWED_ROLES = [
+  "customer",
+  "store",
+  "supplier",
+  "admin",
+  "delivery_company",
+  "delivery_driver",
+];
+
+router.use(authMiddleware);
+router.use(roleMiddleware(UPLOAD_ALLOWED_ROLES));
 
 router.post("/image", (req, res) => {
   if (!isCloudinaryConfigured()) {

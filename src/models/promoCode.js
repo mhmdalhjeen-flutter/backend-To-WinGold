@@ -84,5 +84,6 @@ const promoCodeSchema = new mongoose.Schema({
 promoCodeSchema.index({ createdAt: -1 });
 promoCodeSchema.index({ store: 1, isRegistrationCode: 1, currentUses: 1 });
 promoCodeSchema.index({ "usedBy.user": 1 });
+promoCodeSchema.index({ subscriptionPeriodId: 1, store: 1, cardSource: 1 });
 
 module.exports = mongoose.model("PromoCode", promoCodeSchema);
