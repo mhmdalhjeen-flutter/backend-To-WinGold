@@ -14,6 +14,7 @@ const {
   getCurrentMonthKey,
   addMonthsToMonthKey,
 } = require("../utils/subscriptionMonth.util");
+const { formatMonthLabel } = require("../utils/billingMonth.util");
 const { parseSubscriptionPaymentSubmission } = require("../utils/storeSubscriptionPayment.util");
 const { safeLog } = require("../utils/logSanitize.util");
 
@@ -74,6 +75,54 @@ async function findOldestOpenSubscriptionPeriod(storeId) {
   }).sort({ monthKey: 1 }).lean();
 }
 
+async function findEligibleStoresForSubscriptionRequest() {
+  return Store.find({ isActive: true })
+    .select("_id name subscriptionCardConfig")
+    .sort({ name: 1 })
+    .lean();
+}
+
+async function resolveCycleMonthKeyForStore(storeId, date = new Date()) {
+  const counting = await findActiveCountingPeriod(storeId);
+  if (counting) return counting.monthKey;
+
+  const latestClosed = await StoreSubscriptionPeriod.findOne({
+    store: storeId,
+    status: { $in: CLOSED_SUBSCRIPTION_STATUSES },
+    expiredAt: null,
+  }).sort({ monthKey: -1 }).lean();
+
+  if (latestClosed) {
+    return addMonthsToMonthKey(latestClosed.monthKey, 1);
+  }
+
+  return getCurrentMonthKey(date);
+}
+
+async function reactivateCountingPeriod(periodDoc, store) {
+  const period = periodDoc?.save ? periodDoc : await StoreSubscriptionPeriod.findById(periodDoc?._id || periodDoc);
+  if (!period) return null;
+
+  period.status = SUBSCRIPTION_STATUSES.COUNTING;
+  period.expiredAt = null;
+  period.cardConfig = resolveStoreCardConfig(store);
+  period.paymentMethod = undefined;
+  period.transferInformation = {};
+  period.paymentProof = "";
+  period.paymentProofImage = "";
+  period.rejectionReason = "";
+  period.reviewedBy = null;
+  period.reviewedAt = null;
+  period.exemptedBy = null;
+  period.exemptedAt = null;
+  period.digitalCardsIssued = 0;
+  period.paperCardsIssued = 0;
+  period.paperCodeIds = [];
+  period.cardsIssuedAt = null;
+  await period.save();
+  return period;
+}
+
 async function findOrCreateCountingPeriod(storeId, monthKey, storeDoc = null) {
   const store = storeDoc || await Store.findById(storeId).select("subscriptionCardConfig").lean();
   if (!store) {
@@ -82,10 +131,15 @@ async function findOrCreateCountingPeriod(storeId, monthKey, storeDoc = null) {
     throw err;
   }
 
-  const cardConfig = resolveStoreCardConfig(store);
   const existing = await StoreSubscriptionPeriod.findOne({ store: storeId, monthKey });
-  if (existing) return existing;
+  if (existing?.status === SUBSCRIPTION_STATUSES.COUNTING && !existing.expiredAt) {
+    return existing;
+  }
+  if (existing) {
+    return existing;
+  }
 
+  const cardConfig = resolveStoreCardConfig(store);
   try {
     return await StoreSubscriptionPeriod.create({
       store: storeId,
@@ -110,32 +164,62 @@ async function findOrCreateCountingPeriod(storeId, monthKey, storeDoc = null) {
   }
 }
 
-async function ensureActiveCountingPeriod(storeId) {
-  const counting = await findActiveCountingPeriod(storeId);
-  if (counting) return counting;
+async function ensureCountingPeriodForRequest(storeId) {
+  const activeCounting = await findActiveCountingPeriod(storeId);
+  if (activeCounting) return activeCounting;
 
-  const latestPeriod = await StoreSubscriptionPeriod.findOne({
-    store: storeId,
-    expiredAt: null,
-  }).sort({ monthKey: -1 }).lean();
+  let monthKey = await resolveCycleMonthKeyForStore(storeId);
+  const store = await Store.findById(storeId).select("subscriptionCardConfig").lean();
+  if (!store) return null;
 
-  let monthKey = getCurrentMonthKey();
-  if (latestPeriod && CLOSED_SET.has(latestPeriod.status)) {
-    monthKey = addMonthsToMonthKey(latestPeriod.monthKey, 1);
-  } else if (latestPeriod?.status === SUBSCRIPTION_STATUSES.COUNTING) {
-    return StoreSubscriptionPeriod.findById(latestPeriod._id);
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const period = await findOrCreateCountingPeriod(storeId, monthKey, store);
+    if (!period) return null;
+
+    if (period.status === SUBSCRIPTION_STATUSES.COUNTING && !period.expiredAt) {
+      return period;
+    }
+
+    if (period.expiredAt) {
+      return reactivateCountingPeriod(period, store);
+    }
+
+    if (CLOSED_SET.has(period.status)) {
+      monthKey = addMonthsToMonthKey(monthKey, 1);
+      continue;
+    }
+
+    return null;
   }
 
-  return findOrCreateCountingPeriod(storeId, monthKey);
+  return null;
+}
+
+async function ensureActiveCountingPeriod(storeId) {
+  return ensureCountingPeriodForRequest(storeId);
 }
 
 async function startNewCountingCycleAfterClose(storeId, closedMonthKey) {
   const targetMonthKey = addMonthsToMonthKey(closedMonthKey || getCurrentMonthKey(), 1);
-  const targetExisting = await StoreSubscriptionPeriod.findOne({
+  const existing = await StoreSubscriptionPeriod.findOne({
     store: storeId,
     monthKey: targetMonthKey,
   });
-  if (targetExisting) return targetExisting;
+
+  if (existing?.status === SUBSCRIPTION_STATUSES.COUNTING && !existing.expiredAt) {
+    return existing;
+  }
+
+  if (existing?.expiredAt) {
+    const store = await Store.findById(storeId).select("subscriptionCardConfig").lean();
+    return reactivateCountingPeriod(existing, store);
+  }
+
+  if (existing && CLOSED_SET.has(existing.status)) {
+    return findOrCreateCountingPeriod(storeId, addMonthsToMonthKey(targetMonthKey, 1));
+  }
+
+  if (existing) return existing;
   return findOrCreateCountingPeriod(storeId, targetMonthKey);
 }
 
@@ -184,6 +268,7 @@ async function getStoreSubscriptionStatus(storeId, date = new Date()) {
     storeId,
     storeName: store.name,
     monthKey: period?.monthKey || currentMonthKey,
+    monthLabel: formatMonthLabel(period?.monthKey || currentMonthKey),
     currentCycleMonthKey: countingPeriod?.monthKey || openPeriod?.monthKey || currentMonthKey,
     subscriptionActive: store.subscriptionActive !== false,
     status,
@@ -673,7 +758,7 @@ async function requestSubscriptionForStore(storeId) {
     };
   }
 
-  const countingPeriod = await ensureActiveCountingPeriod(storeId);
+  const countingPeriod = await ensureCountingPeriodForRequest(storeId);
   if (!countingPeriod || countingPeriod.status !== SUBSCRIPTION_STATUSES.COUNTING) {
     return { storeId, skipped: true, reason: "no_counting_period" };
   }
@@ -720,10 +805,7 @@ async function requestSubscriptionForStore(storeId) {
 }
 
 async function requestStoreSubscriptions(adminId) {
-  const stores = await Store.find({ isActive: true })
-    .select("_id name")
-    .sort({ name: 1 })
-    .lean();
+  const stores = await findEligibleStoresForSubscriptionRequest();
 
   const results = [];
   for (const store of stores) {
@@ -743,6 +825,14 @@ async function requestStoreSubscriptions(adminId) {
     finalized.map((row) => row.monthKey).concat(alreadyRequested.map((row) => row.monthKey)),
   )].filter(Boolean);
 
+  const storesRequiringPayment = results.filter((row) => (
+    row.finalized
+    || (row.alreadyRequested && [
+      SUBSCRIPTION_STATUSES.AWAITING_PAYMENT,
+      SUBSCRIPTION_STATUSES.PAYMENT_REJECTED,
+    ].includes(row.status))
+  )).length;
+
   return {
     alreadyExecuted,
     requestedBy: adminId,
@@ -753,10 +843,7 @@ async function requestStoreSubscriptions(adminId) {
     storesAffected: finalized.length,
     storesAlreadyRequested: alreadyRequested.length,
     storesSkipped: skipped.length,
-    storesRequiringPayment: finalized.length + alreadyRequested.filter(
-      (row) => row.status === SUBSCRIPTION_STATUSES.AWAITING_PAYMENT
-        || row.status === SUBSCRIPTION_STATUSES.PAYMENT_REJECTED,
-    ).length,
+    storesRequiringPayment,
     totalStores: stores.length,
     results,
   };
@@ -798,7 +885,11 @@ module.exports = {
   findActiveCountingPeriod,
   findOldestOpenSubscriptionPeriod,
   findOrCreateCountingPeriod,
+  ensureCountingPeriodForRequest,
   ensureActiveCountingPeriod,
+  resolveCycleMonthKeyForStore,
+  findEligibleStoresForSubscriptionRequest,
+  reactivateCountingPeriod,
   startNewCountingCycleAfterClose,
   requestSubscriptionForStore,
   requestStoreSubscriptions,

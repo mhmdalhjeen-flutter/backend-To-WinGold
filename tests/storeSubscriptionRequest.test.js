@@ -35,7 +35,10 @@ const {
   needsSubscriptionPayment,
   isOperationalStatus,
   findOrCreateCountingPeriod,
+  ensureCountingPeriodForRequest,
+  resolveCycleMonthKeyForStore,
 } = require("../src/services/storeSubscription.service");
+const { getCurrentMonthKey } = require("../src/utils/subscriptionMonth.util");
 
 const storeId = new mongoose.Types.ObjectId();
 const adminId = new mongoose.Types.ObjectId();
@@ -48,6 +51,7 @@ function periodKey(store, monthKey) {
 
 function resetState() {
   periods.clear();
+  stores.clear();
   stores.set(String(storeId), {
     _id: storeId,
     name: "Test Store",
@@ -116,14 +120,18 @@ StoreSubscriptionPeriod.findOne = (query) => buildFindOneQuery(async () => {
       .sort((a, b) => b.monthKey.localeCompare(a.monthKey));
     return rows[0] || null;
   }
-  if (query.store && query.status?.$in && query.expiredAt === null) {
-    const rows = Array.from(periods.values())
-      .filter((row) => String(row.store) === String(query.store)
-        && query.status.$in.includes(row.status)
-        && !row.expiredAt)
-      .sort((a, b) => a.monthKey.localeCompare(b.monthKey));
-    return rows[0] || null;
-  }
+    if (query.store && query.status?.$in && query.expiredAt === null) {
+      const rows = Array.from(periods.values())
+        .filter((row) => String(row.store) === String(query.store)
+          && query.status.$in.includes(row.status)
+          && !row.expiredAt);
+      if (query.status.$in.includes(SUBSCRIPTION_STATUSES.AWAITING_PAYMENT)) {
+        rows.sort((a, b) => a.monthKey.localeCompare(b.monthKey));
+      } else {
+        rows.sort((a, b) => b.monthKey.localeCompare(a.monthKey));
+      }
+      return rows[0] || null;
+    }
   if (query.store && query.expiredAt === null && query.monthKey?.$gt) {
     const rows = Array.from(periods.values())
       .filter((row) => String(row.store) === String(query.store)
@@ -179,6 +187,51 @@ StoreSubscriptionPeriod.find = (query) => ({
 
 test.beforeEach(() => {
   resetState();
+});
+
+test("active store with no subscription period is included in admin request", async () => {
+  const monthKey = getCurrentMonthKey();
+  const result = await requestSubscriptionForStore(storeId);
+  assert.equal(result.finalized, true);
+  assert.equal(result.monthKey, monthKey);
+  assert.equal(result.status, SUBSCRIPTION_STATUSES.AWAITING_PAYMENT);
+  assert.ok(periods.get(periodKey(storeId, monthKey)));
+});
+
+test("expired legacy period is reactivated and finalized for the same month", async () => {
+  const expired = attachSave({
+    _id: new mongoose.Types.ObjectId(),
+    store: storeId,
+    monthKey: "2026-08",
+    status: SUBSCRIPTION_STATUSES.ACTIVE,
+    cardConfig: DEFAULT_SUBSCRIPTION_CARD_CONFIG,
+    expiredAt: new Date("2026-08-01"),
+  });
+  periods.set(periodKey(storeId, "2026-08"), expired);
+  periods.set(String(expired._id), expired);
+
+  const result = await requestSubscriptionForStore(storeId);
+  assert.equal(result.finalized, true);
+  assert.equal(result.monthKey, "2026-08");
+  assert.equal(periods.get(periodKey(storeId, "2026-08")).status, SUBSCRIPTION_STATUSES.AWAITING_PAYMENT);
+  assert.equal(periods.get(periodKey(storeId, "2026-09")), undefined);
+});
+
+test("requestStoreSubscriptions affects every eligible active store", async () => {
+  const secondStoreId = new mongoose.Types.ObjectId();
+  stores.set(String(secondStoreId), {
+    _id: secondStoreId,
+    name: "Second Store",
+    isActive: true,
+    subscriptionActive: true,
+    codePrefix: "SEC",
+    subscriptionCardConfig: DEFAULT_SUBSCRIPTION_CARD_CONFIG,
+  });
+
+  const payload = await requestStoreSubscriptions(adminId);
+  assert.equal(payload.totalStores, 2);
+  assert.equal(payload.storesAffected, 2);
+  assert.ok(payload.finalizedMonths.length >= 1);
 });
 
 test("first admin request finalizes counting to awaiting_payment with frozen card config", async () => {
