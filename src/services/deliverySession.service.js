@@ -149,6 +149,79 @@ function stopOrderId(stop) {
   return String(stop?.order?._id || stop?.order || "");
 }
 
+const HANDOVER_ORDER_STATUSES = new Set([
+  "delivery_handover_complete",
+  "delivered_to_driver",
+  "delivered_to_customer",
+  "delivered",
+]);
+
+const ADVANCE_TO_OUT_FOR_DELIVERY_FROM = new Set([
+  SESSION_STATUSES.DRIVER_ASSIGNED,
+  SESSION_STATUSES.ACCEPTED,
+  SESSION_STATUSES.READY_FOR_PICKUP,
+]);
+
+function collectSessionOrderIds(doc) {
+  const ids = new Set();
+  for (const entry of doc.orders || []) {
+    if (entry) ids.add(String(entry._id || entry));
+  }
+  for (const stop of doc.storeStops || []) {
+    const id = stopOrderId(stop);
+    if (id) ids.add(id);
+  }
+  return [...ids];
+}
+
+async function loadLiveOrdersForSession(doc) {
+  const orderIds = collectSessionOrderIds(doc);
+  if (!orderIds.length) return [];
+  return Order.find({ _id: { $in: orderIds } }).select("status").lean();
+}
+
+function markHandoverStopsFromLiveOrders(doc, statusById) {
+  for (const stop of doc.storeStops || []) {
+    const liveStatus = statusById[stopOrderId(stop)];
+    if (!liveStatus) continue;
+    stop.orderStatus = liveStatus;
+    if (HANDOVER_ORDER_STATUSES.has(liveStatus) && stop.collectionStatus !== "collected") {
+      stop.collectionStatus = "collected";
+      stop.collectedAt = stop.collectedAt || new Date();
+    }
+  }
+}
+
+function shouldAdvanceSessionToOutForDelivery(doc, liveOrders, previousStatus) {
+  if (TERMINAL_SESSION_STATUSES.has(previousStatus)) return false;
+  if (
+    previousStatus === SESSION_STATUSES.OUT_FOR_DELIVERY
+    || OUT_FOR_DELIVERY_STATUSES.has(previousStatus)
+  ) return false;
+  if (!doc.assignedDriver?.driverId) return false;
+  if (!ADVANCE_TO_OUT_FOR_DELIVERY_FROM.has(previousStatus)) return false;
+
+  const allOrdersHandedOver = liveOrders.length > 0
+    && liveOrders.every((o) => HANDOVER_ORDER_STATUSES.has(o.status));
+  const allCollected = allStopsCollected(doc.storeStops) || allOrdersHandedOver;
+  return allCollected;
+}
+
+function advanceSessionToOutForDelivery(doc) {
+  doc.status = SESSION_STATUSES.OUT_FOR_DELIVERY;
+  pushTimeline(doc, SESSION_STATUSES.OUT_FOR_DELIVERY, "استلم السائق الطلب من المتجر");
+}
+
+async function countOutForDeliverySessionsByCompanies(companyIds) {
+  if (!Array.isArray(companyIds) || !companyIds.length) return new Map();
+  const sentStatuses = [...SENT_ORDER_STATUSES];
+  const rows = await DeliverySession.aggregate([
+    { $match: { deliveryCompany: { $in: companyIds }, status: { $in: sentStatuses } } },
+    { $group: { _id: "$deliveryCompany", count: { $sum: 1 } } },
+  ]);
+  return new Map(rows.map((row) => [String(row._id), row.count]));
+}
+
 /** Line items for delivery company/driver — never include prices. */
 function mapDeliveryLineItems(items = []) {
   return (items || []).map((item) => {
@@ -261,7 +334,7 @@ async function reconcileSessionFromOrders(sessionId) {
     return doc;
   }
 
-  const orderIds = (doc.orders || []).map((o) => o._id || o);
+  const orderIds = collectSessionOrderIds(doc);
   if (!orderIds.length) return doc;
 
   const freshOrders = await Order.find({ _id: { $in: orderIds } })
@@ -287,6 +360,9 @@ async function reconcileSessionFromOrders(sessionId) {
     }
   }
 
+  const statusById = Object.fromEntries(freshOrders.map((o) => [String(o._id), o.status]));
+  markHandoverStopsFromLiveOrders(doc, statusById);
+
   const REJECTED_ORDER_STATUSES = new Set(["rejected", "cancelled"]);
   const hasRejectedStop = (doc.storeStops || []).some((stop) =>
     REJECTED_ORDER_STATUSES.has(stop.orderStatus)
@@ -303,33 +379,9 @@ async function reconcileSessionFromOrders(sessionId) {
     doc.status = SESSION_STATUSES.READY_FOR_PICKUP;
     pushTimeline(doc, SESSION_STATUSES.READY_FOR_PICKUP, "جميع المتاجر وافقت على الطلبات");
     changed = true;
-  } else if (
-    (previousStatus === SESSION_STATUSES.DRIVER_ASSIGNED
-      || previousStatus === SESSION_STATUSES.ACCEPTED
-      || previousStatus === SESSION_STATUSES.READY_FOR_PICKUP)
-    && doc.assignedDriver?.driverId
-  ) {
-    // Heal stuck handoff: store already handed over but session never advanced.
-    const HANDOVER_ORDER_STATUSES = new Set([
-      "delivery_handover_complete",
-      "delivered_to_driver",
-      "delivered_to_customer",
-      "delivered",
-    ]);
-    const allOrdersHandedOver = freshOrders.length > 0
-      && freshOrders.every((o) => HANDOVER_ORDER_STATUSES.has(o.status));
-    if (allOrdersHandedOver) {
-      for (const stop of doc.storeStops || []) {
-        if (stop.collectionStatus !== "collected") {
-          stop.collectionStatus = "collected";
-          stop.collectedAt = stop.collectedAt || new Date();
-          changed = true;
-        }
-      }
-      doc.status = SESSION_STATUSES.OUT_FOR_DELIVERY;
-      pushTimeline(doc, SESSION_STATUSES.OUT_FOR_DELIVERY, "استلم السائق الطلب من المتجر");
-      changed = true;
-    }
+  } else if (shouldAdvanceSessionToOutForDelivery(doc, freshOrders, previousStatus)) {
+    advanceSessionToOutForDelivery(doc);
+    changed = true;
   }
 
   if (!changed) return doc;
@@ -576,12 +628,6 @@ async function syncAfterStoreHandover(orderId) {
   // Company-delivery handoff only; ignore pickup / nearby paths.
   if (order.deliveryMethod && order.deliveryMethod !== DELIVERY_METHODS.DELIVERY) return;
 
-  const HANDOVER_ORDER_STATUSES = new Set([
-    "delivery_handover_complete",
-    "delivered_to_driver",
-    "delivered_to_customer",
-    "delivered",
-  ]);
   if (!HANDOVER_ORDER_STATUSES.has(order.status)) return;
 
   const doc = await DeliverySession.findById(order.deliveryGroup);
@@ -604,40 +650,16 @@ async function syncAfterStoreHandover(orderId) {
     }
   }
 
-  // Source of truth: live order statuses (not only in-memory collection flags).
-  const orderIds = (doc.orders || []).map((o) => o._id || o);
-  const liveOrders = orderIds.length
-    ? await Order.find({ _id: { $in: orderIds } }).select("status").lean()
-    : [];
+  const liveOrders = await loadLiveOrdersForSession(doc);
   const statusById = Object.fromEntries(liveOrders.map((o) => [String(o._id), o.status]));
-
-  for (const stop of doc.storeStops || []) {
-    const liveStatus = statusById[stopOrderId(stop)];
-    if (!liveStatus) continue;
-    stop.orderStatus = liveStatus;
-    if (HANDOVER_ORDER_STATUSES.has(liveStatus)) {
-      if (stop.collectionStatus !== "collected") {
-        stop.collectionStatus = "collected";
-        stop.collectedAt = stop.collectedAt || new Date();
-      }
-    }
-  }
+  markHandoverStopsFromLiveOrders(doc, statusById);
 
   const allOrdersHandedOver = liveOrders.length > 0
     && liveOrders.every((o) => HANDOVER_ORDER_STATUSES.has(o.status));
-  const allCollected = allStopsCollected(doc.storeStops) || allOrdersHandedOver;
-
-  const hasDriver = Boolean(doc.assignedDriver?.driverId);
-  const canAdvanceFrom = new Set([
-    SESSION_STATUSES.DRIVER_ASSIGNED,
-    SESSION_STATUSES.ACCEPTED,
-    SESSION_STATUSES.READY_FOR_PICKUP,
-  ]);
 
   let statusAdvanced = false;
-  if (!alreadyOut && hasDriver && allCollected && canAdvanceFrom.has(previousStatus)) {
-    doc.status = SESSION_STATUSES.OUT_FOR_DELIVERY;
-    pushTimeline(doc, SESSION_STATUSES.OUT_FOR_DELIVERY, "استلم السائق الطلب من المتجر");
+  if (!alreadyOut && shouldAdvanceSessionToOutForDelivery(doc, liveOrders, previousStatus)) {
+    advanceSessionToOutForDelivery(doc);
     statusAdvanced = true;
   }
 
@@ -653,12 +675,11 @@ async function syncAfterStoreHandover(orderId) {
         safeLog("error", "delivery_handover_notify_failed", { message: err?.message });
       });
     });
-  } else if (!alreadyOut && hasDriver && HANDOVER_ORDER_STATUSES.has(order.status)) {
+  } else if (!alreadyOut && doc.assignedDriver?.driverId && HANDOVER_ORDER_STATUSES.has(order.status)) {
     safeLog("warn", "delivery_handover_status_stuck", {
       orderId: String(oid),
       sessionId: String(doc._id),
       previousStatus,
-      allCollected,
       allOrdersHandedOver,
       stopCount: (doc.storeStops || []).length,
       orderCount: liveOrders.length,
@@ -1194,6 +1215,7 @@ module.exports = {
   rejectSession,
   markOutForDelivery,
   completeSession,
+  countOutForDeliverySessionsByCompanies,
   formatSessionSummary,
   formatSessionDetails,
   buildStoreStops,

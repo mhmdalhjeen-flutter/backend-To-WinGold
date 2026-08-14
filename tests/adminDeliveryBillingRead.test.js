@@ -8,6 +8,7 @@ const mongoose = require("mongoose");
 const DeliveryCompany = require("../src/models/deliveryCompany");
 const DeliveryCompanyBillingPeriod = require("../src/models/deliveryCompanyBillingPeriod");
 const DeliveryCompanyOrderHandover = require("../src/models/deliveryCompanyOrderHandover");
+const DeliverySession = require("../src/models/deliverySession");
 
 const { BILLING_STATUSES, DEFAULT_PRICE_PER_ORDER } = require("../src/constants/deliveryBilling.constants");
 const { getCurrentMonthKey } = require("../src/utils/subscriptionMonth.util");
@@ -112,6 +113,8 @@ DeliveryCompanyOrderHandover.find = () => ({
 });
 
 DeliveryCompanyOrderHandover.countDocuments = async () => 0;
+
+DeliverySession.aggregate = async () => [];
 
 test.beforeEach(() => {
   resetState();

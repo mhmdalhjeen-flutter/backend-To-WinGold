@@ -516,9 +516,10 @@ async function listAdminBillingCards(date = new Date()) {
     .lean();
 
   const companyIds = companies.map((c) => c._id);
+  const deliverySessionService = require("./deliverySession.service");
   const handoverService = require("./deliveryCompanyHandover.service");
-  const [unconfirmedByCompany, currentHandoverCounts, previousHandoverCounts] = await Promise.all([
-    handoverService.countPendingCustomerDeliveriesByCompanies(companyIds),
+  const [outForDeliveryByCompany, currentHandoverCounts, previousHandoverCounts] = await Promise.all([
+    deliverySessionService.countOutForDeliverySessionsByCompanies(companyIds),
     handoverService.countHandoversByCompaniesForMonth(companyIds, currentMonthKey),
     handoverService.countHandoversByCompaniesForMonth(companyIds, previousMonthKey),
   ]);
@@ -566,7 +567,7 @@ async function listAdminBillingCards(date = new Date()) {
       const currentMonthHandoverCount = currentHandoverCounts.get(String(company._id)) || 0;
       const previousMonthHandoverCount = previousHandoverCounts.get(String(company._id)) || 0;
       const currentMonthOrderCount = currentMonthHandoverCount;
-      const unconfirmedHandoverCount = unconfirmedByCompany.get(String(company._id)) || 0;
+      const unconfirmedHandoverCount = outForDeliveryByCompany.get(String(company._id)) || 0;
       const currentPeriodForDisplay = periodWithHandoverCount(
         currentPeriod,
         currentMonthKey,
