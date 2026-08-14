@@ -538,6 +538,7 @@ router.get("/delivery-proofs/:id", deliveryProofAdmin.getOne);
 
 // ─── اشتراك المتاجر الشهري ───────────────────────────────────────────────────
 router.get("/store-subscriptions", storeSubscriptionAdmin.listSubscriptionCards);
+router.post("/store-subscriptions/request", sensitiveAuth, storeSubscriptionAdmin.requestStoreSubscriptions);
 router.patch("/store-subscriptions/periods/:periodId/approve", sensitiveAuth, storeSubscriptionAdmin.approveSubscriptionPayment);
 router.patch("/store-subscriptions/periods/:periodId/reject", sensitiveAuth, storeSubscriptionAdmin.rejectSubscriptionPayment);
 router.patch("/store-subscriptions/stores/:storeId/exempt", sensitiveAuth, storeSubscriptionAdmin.exemptStoreSubscription);

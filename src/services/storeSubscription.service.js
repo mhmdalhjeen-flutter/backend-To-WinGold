@@ -5,12 +5,14 @@ const storeCardInventoryService = require("./storeCardInventory.service");
 const { generatePromoCodeString } = require("../utils/promoCode.util");
 const {
   SUBSCRIPTION_STATUSES,
+  CLOSED_SUBSCRIPTION_STATUSES,
+  OPEN_SUBSCRIPTION_STATUSES,
   CARD_SOURCES,
   DEFAULT_SUBSCRIPTION_CARD_CONFIG,
 } = require("../constants/storeSubscription.constants");
 const {
   getCurrentMonthKey,
-  isMonthKeyExpired,
+  addMonthsToMonthKey,
 } = require("../utils/subscriptionMonth.util");
 const { parseSubscriptionPaymentSubmission } = require("../utils/storeSubscriptionPayment.util");
 const { safeLog } = require("../utils/logSanitize.util");
@@ -33,21 +35,129 @@ function resolveStoreCardConfig(store) {
   };
 }
 
+const CLOSED_SET = new Set(CLOSED_SUBSCRIPTION_STATUSES);
+
 function isOperationalStatus(status) {
-  return status === SUBSCRIPTION_STATUSES.ACTIVE
+  return status === SUBSCRIPTION_STATUSES.COUNTING
+    || status === SUBSCRIPTION_STATUSES.ACTIVE
     || status === SUBSCRIPTION_STATUSES.EXEMPTED
     || status === SUBSCRIPTION_STATUSES.PAYMENT_PENDING;
 }
 
 function blocksStoreAccess(status) {
-  return status === SUBSCRIPTION_STATUSES.PAYMENT_REJECTED;
+  return status === SUBSCRIPTION_STATUSES.AWAITING_PAYMENT
+    || status === SUBSCRIPTION_STATUSES.PAYMENT_REJECTED;
+}
+
+function needsSubscriptionPayment(status) {
+  return status === SUBSCRIPTION_STATUSES.AWAITING_PAYMENT
+    || status === SUBSCRIPTION_STATUSES.PAYMENT_REJECTED;
 }
 
 async function getCurrentPeriod(storeId, monthKey = getCurrentMonthKey()) {
   return StoreSubscriptionPeriod.findOne({ store: storeId, monthKey }).lean();
 }
 
-async function getStoreSubscriptionStatus(storeId, monthKey = getCurrentMonthKey()) {
+async function findActiveCountingPeriod(storeId) {
+  return StoreSubscriptionPeriod.findOne({
+    store: storeId,
+    status: SUBSCRIPTION_STATUSES.COUNTING,
+    expiredAt: null,
+  }).sort({ monthKey: -1 });
+}
+
+async function findOldestOpenSubscriptionPeriod(storeId) {
+  return StoreSubscriptionPeriod.findOne({
+    store: storeId,
+    status: { $in: OPEN_SUBSCRIPTION_STATUSES },
+    expiredAt: null,
+  }).sort({ monthKey: 1 }).lean();
+}
+
+async function findOrCreateCountingPeriod(storeId, monthKey, storeDoc = null) {
+  const store = storeDoc || await Store.findById(storeId).select("subscriptionCardConfig").lean();
+  if (!store) {
+    const err = new Error("المتجر غير موجود");
+    err.status = 404;
+    throw err;
+  }
+
+  const cardConfig = resolveStoreCardConfig(store);
+  const existing = await StoreSubscriptionPeriod.findOne({ store: storeId, monthKey });
+  if (existing) return existing;
+
+  try {
+    return await StoreSubscriptionPeriod.create({
+      store: storeId,
+      monthKey,
+      status: SUBSCRIPTION_STATUSES.COUNTING,
+      cardConfig,
+    });
+  } catch (err) {
+    if (!isMongoDuplicateKeyError(err)) throw err;
+    safeLog("info", "store_subscription_period_race_resolved", {
+      storeId: String(storeId),
+      monthKey,
+      phase: "counting_create",
+    });
+    const period = await StoreSubscriptionPeriod.findOne({ store: storeId, monthKey });
+    if (!period) {
+      const retryErr = new Error("فشل إنشاء فترة الاشتراك");
+      retryErr.status = 500;
+      throw retryErr;
+    }
+    return period;
+  }
+}
+
+async function ensureActiveCountingPeriod(storeId) {
+  const counting = await findActiveCountingPeriod(storeId);
+  if (counting) return counting;
+
+  const latestPeriod = await StoreSubscriptionPeriod.findOne({
+    store: storeId,
+    expiredAt: null,
+  }).sort({ monthKey: -1 }).lean();
+
+  let monthKey = getCurrentMonthKey();
+  if (latestPeriod && CLOSED_SET.has(latestPeriod.status)) {
+    monthKey = addMonthsToMonthKey(latestPeriod.monthKey, 1);
+  } else if (latestPeriod?.status === SUBSCRIPTION_STATUSES.COUNTING) {
+    return StoreSubscriptionPeriod.findById(latestPeriod._id);
+  }
+
+  return findOrCreateCountingPeriod(storeId, monthKey);
+}
+
+async function startNewCountingCycleAfterClose(storeId, closedMonthKey) {
+  const targetMonthKey = addMonthsToMonthKey(closedMonthKey || getCurrentMonthKey(), 1);
+  const targetExisting = await StoreSubscriptionPeriod.findOne({
+    store: storeId,
+    monthKey: targetMonthKey,
+  });
+  if (targetExisting) return targetExisting;
+  return findOrCreateCountingPeriod(storeId, targetMonthKey);
+}
+
+async function resolveAdminListMonthKey(monthKey) {
+  if (monthKey) return monthKey;
+
+  const openPeriod = await StoreSubscriptionPeriod.findOne({
+    status: { $in: OPEN_SUBSCRIPTION_STATUSES },
+    expiredAt: null,
+  }).sort({ monthKey: -1 }).lean();
+  if (openPeriod) return openPeriod.monthKey;
+
+  const countingPeriod = await StoreSubscriptionPeriod.findOne({
+    status: SUBSCRIPTION_STATUSES.COUNTING,
+    expiredAt: null,
+  }).sort({ monthKey: -1 }).lean();
+  if (countingPeriod) return countingPeriod.monthKey;
+
+  return getCurrentMonthKey();
+}
+
+async function getStoreSubscriptionStatus(storeId, date = new Date()) {
   const store = await Store.findById(storeId).select("subscriptionActive subscriptionCardConfig name").lean();
   if (!store) {
     const err = new Error("المتجر غير موجود");
@@ -55,22 +165,35 @@ async function getStoreSubscriptionStatus(storeId, monthKey = getCurrentMonthKey
     throw err;
   }
 
-  const period = await getCurrentPeriod(storeId, monthKey);
+  const [countingPeriod, openPeriod] = await Promise.all([
+    findActiveCountingPeriod(storeId).then((p) => (p ? p.toObject?.() || p : null)),
+    findOldestOpenSubscriptionPeriod(storeId),
+  ]);
+
+  const currentMonthKey = openPeriod?.monthKey
+    || countingPeriod?.monthKey
+    || getCurrentMonthKey(date);
+  const period = openPeriod || countingPeriod || await getCurrentPeriod(storeId, currentMonthKey);
+  const status = period?.status || null;
+  const paymentPending = status === SUBSCRIPTION_STATUSES.PAYMENT_PENDING;
+  const paymentRejected = status === SUBSCRIPTION_STATUSES.PAYMENT_REJECTED;
+  const awaitingPayment = status === SUBSCRIPTION_STATUSES.AWAITING_PAYMENT;
+  const needsPayment = Boolean(openPeriod && needsSubscriptionPayment(openPeriod.status));
+
   return {
     storeId,
     storeName: store.name,
-    monthKey,
+    monthKey: period?.monthKey || currentMonthKey,
+    currentCycleMonthKey: countingPeriod?.monthKey || openPeriod?.monthKey || currentMonthKey,
     subscriptionActive: store.subscriptionActive !== false,
-    status: period?.status || null,
+    status,
     period,
-    cardConfig: resolveStoreCardConfig(store),
-    paymentPending: period?.status === SUBSCRIPTION_STATUSES.PAYMENT_PENDING,
-    paymentRejected: period?.status === SUBSCRIPTION_STATUSES.PAYMENT_REJECTED,
-    canOperate: store.subscriptionActive !== false
-      && (!period?.status || !blocksStoreAccess(period.status)),
-    needsPayment: !period
-      || period.status === SUBSCRIPTION_STATUSES.PAYMENT_REJECTED
-      || (!isOperationalStatus(period.status) && period.status !== SUBSCRIPTION_STATUSES.PAYMENT_PENDING),
+    cardConfig: period?.cardConfig || resolveStoreCardConfig(store),
+    awaitingPayment,
+    paymentPending,
+    paymentRejected,
+    needsPayment,
+    canOperate: store.subscriptionActive !== false && !needsPayment,
     cardsIssued: Boolean(period?.cardsIssuedAt),
   };
 }
@@ -143,12 +266,13 @@ async function findOrCreateStoreSubscriptionPeriod(storeId, monthKey, insertFiel
   }
 }
 
-async function ensurePeriodForPayment(store, monthKey = getCurrentMonthKey()) {
-  const cardConfig = resolveStoreCardConfig(store);
-  let period = await findOrCreateStoreSubscriptionPeriod(store._id, monthKey, {
-    status: SUBSCRIPTION_STATUSES.PAYMENT_PENDING,
-    cardConfig,
-  });
+async function ensurePeriodForPayment(store, periodDoc) {
+  const period = periodDoc?.save ? periodDoc : await StoreSubscriptionPeriod.findById(periodDoc?._id || periodDoc);
+  if (!period) {
+    const err = new Error("فترة الاشتراك غير موجودة");
+    err.status = 404;
+    throw err;
+  }
 
   if (period.status === SUBSCRIPTION_STATUSES.ACTIVE || period.status === SUBSCRIPTION_STATUSES.EXEMPTED) {
     const err = new Error("الاشتراك الشهري مفعّل بالفعل");
@@ -156,7 +280,18 @@ async function ensurePeriodForPayment(store, monthKey = getCurrentMonthKey()) {
     throw err;
   }
 
-  period.cardConfig = cardConfig;
+  if (period.status === SUBSCRIPTION_STATUSES.PAYMENT_PENDING) {
+    const err = new Error("الدفع قيد المراجعة بالفعل");
+    err.status = 400;
+    throw err;
+  }
+
+  if (![SUBSCRIPTION_STATUSES.AWAITING_PAYMENT, SUBSCRIPTION_STATUSES.PAYMENT_REJECTED].includes(period.status)) {
+    const err = new Error("لا توجد مطالبة دفع مفتوحة للاشتراك");
+    err.status = 400;
+    throw err;
+  }
+
   return period;
 }
 
@@ -168,9 +303,15 @@ async function submitSubscriptionPayment(storeId, body = {}) {
     throw err;
   }
 
-  const monthKey = getCurrentMonthKey();
+  const openPeriod = await findOldestOpenSubscriptionPeriod(storeId);
+  if (!openPeriod) {
+    const err = new Error("لا توجد مطالبة دفع مفتوحة للاشتراك");
+    err.status = 400;
+    throw err;
+  }
+
   const payment = await parseSubscriptionPaymentSubmission(body);
-  const period = await ensurePeriodForPayment(store, monthKey);
+  const period = await ensurePeriodForPayment(store, openPeriod);
 
   period.status = SUBSCRIPTION_STATUSES.PAYMENT_PENDING;
   period.paymentMethod = payment.paymentMethod;
@@ -182,7 +323,7 @@ async function submitSubscriptionPayment(storeId, body = {}) {
   period.reviewedAt = null;
   await period.save();
 
-  return getStoreSubscriptionStatus(storeId, monthKey);
+  return getStoreSubscriptionStatus(storeId);
 }
 
 async function issueSubscriptionCards(period, adminId = null) {
@@ -261,6 +402,8 @@ async function approveSubscriptionPayment(periodId, adminId) {
     await store.save();
   }
 
+  await startNewCountingCycleAfterClose(period.store, period.monthKey);
+
   return period;
 }
 
@@ -285,7 +428,7 @@ async function rejectSubscriptionPayment(periodId, adminId, reason = "") {
   return period;
 }
 
-async function exemptStoreForMonth(storeId, adminId, monthKey = getCurrentMonthKey()) {
+async function exemptStoreForMonth(storeId, adminId, monthKey = null) {
   const store = await Store.findById(storeId);
   if (!store) {
     const err = new Error("المتجر غير موجود");
@@ -293,8 +436,23 @@ async function exemptStoreForMonth(storeId, adminId, monthKey = getCurrentMonthK
     throw err;
   }
 
-  let period = await StoreSubscriptionPeriod.findOne({ store: storeId, monthKey });
-  const cardConfig = resolveStoreCardConfig(store);
+  let periodDoc = null;
+  if (monthKey) {
+    periodDoc = await StoreSubscriptionPeriod.findOne({ store: storeId, monthKey });
+  } else {
+    const openPeriod = await findOldestOpenSubscriptionPeriod(storeId);
+    if (openPeriod) {
+      periodDoc = await StoreSubscriptionPeriod.findById(openPeriod._id);
+      monthKey = openPeriod.monthKey;
+    } else {
+      const counting = await findActiveCountingPeriod(storeId);
+      monthKey = counting?.monthKey || getCurrentMonthKey();
+      if (counting) periodDoc = counting;
+    }
+  }
+
+  const cardConfig = periodDoc?.cardConfig || resolveStoreCardConfig(store);
+  let period = periodDoc;
 
   if (!period) {
     period = await findOrCreateStoreSubscriptionPeriod(storeId, monthKey, {
@@ -308,7 +466,9 @@ async function exemptStoreForMonth(storeId, adminId, monthKey = getCurrentMonthK
     period.exemptedBy = adminId;
     period.exemptedAt = new Date();
     period.rejectionReason = "";
-    period.cardConfig = cardConfig;
+    if (!period.cardConfig?.digital?.quantity && !period.cardConfig?.paper?.quantity) {
+      period.cardConfig = cardConfig;
+    }
     await period.save();
   }
 
@@ -319,21 +479,24 @@ async function exemptStoreForMonth(storeId, adminId, monthKey = getCurrentMonthK
     await store.save();
   }
 
+  await startNewCountingCycleAfterClose(storeId, period.monthKey);
+
   return period;
 }
 
-async function exemptAllExcept(storeIdsToKeep = [], adminId, monthKey = getCurrentMonthKey()) {
+async function exemptAllExcept(storeIdsToKeep = [], adminId, monthKey = null) {
+  const resolvedMonthKey = await resolveAdminListMonthKey(monthKey);
   const keepSet = new Set((storeIdsToKeep || []).map(String));
   const stores = await Store.find({ isActive: true }).select("_id").lean();
   const results = [];
 
   for (const store of stores) {
     if (keepSet.has(String(store._id))) continue;
-    const period = await exemptStoreForMonth(store._id, adminId, monthKey);
+    const period = await exemptStoreForMonth(store._id, adminId, resolvedMonthKey);
     results.push({ storeId: store._id, periodId: period._id, status: period.status });
   }
 
-  return { monthKey, exemptedCount: results.length, results };
+  return { monthKey: resolvedMonthKey, exemptedCount: results.length, results };
 }
 
 async function expireSubscriptionPeriod(period) {
@@ -353,16 +516,22 @@ async function expireSubscriptionPeriod(period) {
   return period;
 }
 
-async function expireEndedSubscriptionPeriods(date = new Date()) {
-  const currentMonthKey = getCurrentMonthKey(date);
-  const stalePeriods = await StoreSubscriptionPeriod.find({
-    monthKey: { $ne: currentMonthKey },
+async function expireEndedSubscriptionPeriods() {
+  const completedPeriods = await StoreSubscriptionPeriod.find({
+    status: { $in: CLOSED_SUBSCRIPTION_STATUSES },
     expiredAt: null,
+    cardsIssuedAt: { $ne: null },
   }).select("_id store monthKey");
 
   const expired = [];
-  for (const period of stalePeriods) {
-    if (isMonthKeyExpired(period.monthKey, date)) {
+  for (const period of completedPeriods) {
+    const newerPeriod = await StoreSubscriptionPeriod.findOne({
+      store: period.store,
+      monthKey: { $gt: period.monthKey },
+      expiredAt: null,
+    }).select("_id").lean();
+
+    if (newerPeriod) {
       await expireSubscriptionPeriod(await StoreSubscriptionPeriod.findById(period._id));
       expired.push(period._id);
     }
@@ -370,26 +539,30 @@ async function expireEndedSubscriptionPeriods(date = new Date()) {
   return expired;
 }
 
-async function listAdminSubscriptionCards(monthKey = getCurrentMonthKey()) {
+async function listAdminSubscriptionCards(monthKey) {
+  const resolvedMonthKey = await resolveAdminListMonthKey(monthKey);
   const stores = await Store.find({ isActive: true })
     .select("name phone whatsapp owner subscriptionCardConfig subscriptionActive")
     .populate("owner", "name email phone")
     .sort({ name: 1 })
     .lean();
 
-  const periods = await StoreSubscriptionPeriod.find({ monthKey })
+  const periods = await StoreSubscriptionPeriod.find({ monthKey: resolvedMonthKey })
     .lean();
   const periodByStore = new Map(periods.map((p) => [String(p.store), p]));
 
-  return stores.map((store) => {
-    const period = periodByStore.get(String(store._id)) || null;
-    return {
-      store,
-      period,
-      cardConfig: resolveStoreCardConfig(store),
-      status: period?.status || null,
-    };
-  });
+  return {
+    monthKey: resolvedMonthKey,
+    cards: stores.map((store) => {
+      const period = periodByStore.get(String(store._id)) || null;
+      return {
+        store,
+        period,
+        cardConfig: period?.cardConfig || resolveStoreCardConfig(store),
+        status: period?.status || null,
+      };
+    }),
+  };
 }
 
 function resolvePeriodStoreId(period) {
@@ -472,6 +645,123 @@ async function getSubscriptionPaperCodesForExport(periodId) {
   };
 }
 
+function serializeSubscriptionPeriod(period) {
+  if (!period) return null;
+  const row = period.toObject?.() || period;
+  return {
+    _id: row._id,
+    store: row.store,
+    monthKey: row.monthKey,
+    status: row.status,
+    cardConfig: row.cardConfig,
+    paymentMethod: row.paymentMethod,
+    rejectionReason: row.rejectionReason,
+    cardsIssuedAt: row.cardsIssuedAt,
+  };
+}
+
+async function requestSubscriptionForStore(storeId) {
+  const openBill = await findOldestOpenSubscriptionPeriod(storeId);
+  if (openBill) {
+    return {
+      storeId,
+      alreadyRequested: true,
+      monthKey: openBill.monthKey,
+      status: openBill.status,
+      cardConfig: openBill.cardConfig,
+      openPeriod: serializeSubscriptionPeriod(openBill),
+    };
+  }
+
+  const countingPeriod = await ensureActiveCountingPeriod(storeId);
+  if (!countingPeriod || countingPeriod.status !== SUBSCRIPTION_STATUSES.COUNTING) {
+    return { storeId, skipped: true, reason: "no_counting_period" };
+  }
+
+  const store = await Store.findById(storeId).select("subscriptionCardConfig").lean();
+  const cardConfig = resolveStoreCardConfig(store);
+  const finalized = await StoreSubscriptionPeriod.findOneAndUpdate(
+    {
+      _id: countingPeriod._id,
+      status: SUBSCRIPTION_STATUSES.COUNTING,
+    },
+    {
+      $set: {
+        status: SUBSCRIPTION_STATUSES.AWAITING_PAYMENT,
+        cardConfig,
+      },
+    },
+    { new: true },
+  );
+
+  if (!finalized) {
+    const concurrentOpen = await findOldestOpenSubscriptionPeriod(storeId);
+    if (concurrentOpen) {
+      return {
+        storeId,
+        alreadyRequested: true,
+        monthKey: concurrentOpen.monthKey,
+        status: concurrentOpen.status,
+        cardConfig: concurrentOpen.cardConfig,
+        openPeriod: serializeSubscriptionPeriod(concurrentOpen),
+      };
+    }
+    return { storeId, skipped: true, reason: "finalize_failed" };
+  }
+
+  return {
+    storeId,
+    finalized: true,
+    monthKey: finalized.monthKey,
+    status: finalized.status,
+    cardConfig: finalized.cardConfig,
+    openPeriod: serializeSubscriptionPeriod(finalized),
+  };
+}
+
+async function requestStoreSubscriptions(adminId) {
+  const stores = await Store.find({ isActive: true })
+    .select("_id name")
+    .sort({ name: 1 })
+    .lean();
+
+  const results = [];
+  for (const store of stores) {
+    const result = await requestSubscriptionForStore(store._id);
+    results.push({
+      ...result,
+      storeName: store.name,
+    });
+  }
+
+  const finalized = results.filter((row) => row.finalized);
+  const alreadyRequested = results.filter((row) => row.alreadyRequested);
+  const skipped = results.filter((row) => row.skipped);
+  const alreadyExecuted = finalized.length === 0 && alreadyRequested.length > 0;
+
+  const finalizedMonthKeys = [...new Set(
+    finalized.map((row) => row.monthKey).concat(alreadyRequested.map((row) => row.monthKey)),
+  )].filter(Boolean);
+
+  return {
+    alreadyExecuted,
+    requestedBy: adminId,
+    message: alreadyExecuted
+      ? "تم طلب اشتراكات المتاجر مسبقاً لهذه الدورة"
+      : "تم طلب اشتراكات المتاجر بنجاح",
+    finalizedMonths: finalizedMonthKeys,
+    storesAffected: finalized.length,
+    storesAlreadyRequested: alreadyRequested.length,
+    storesSkipped: skipped.length,
+    storesRequiringPayment: finalized.length + alreadyRequested.filter(
+      (row) => row.status === SUBSCRIPTION_STATUSES.AWAITING_PAYMENT
+        || row.status === SUBSCRIPTION_STATUSES.PAYMENT_REJECTED,
+    ).length,
+    totalStores: stores.length,
+    results,
+  };
+}
+
 function buildSubscriptionCardIssuancePlan(cardConfig = {}) {
   return {
     digitalQty: Number(cardConfig.digital?.quantity || 0),
@@ -487,6 +777,7 @@ module.exports = {
   resolveStoreCardConfig,
   isOperationalStatus,
   blocksStoreAccess,
+  needsSubscriptionPayment,
   buildSubscriptionCardIssuancePlan,
   getCurrentPeriod,
   getStoreSubscriptionStatus,
@@ -504,4 +795,12 @@ module.exports = {
   findSubscriptionPaperPromoCodes,
   resolvePeriodStoreId,
   findOrCreateStoreSubscriptionPeriod,
+  findActiveCountingPeriod,
+  findOldestOpenSubscriptionPeriod,
+  findOrCreateCountingPeriod,
+  ensureActiveCountingPeriod,
+  startNewCountingCycleAfterClose,
+  requestSubscriptionForStore,
+  requestStoreSubscriptions,
+  resolveAdminListMonthKey,
 };

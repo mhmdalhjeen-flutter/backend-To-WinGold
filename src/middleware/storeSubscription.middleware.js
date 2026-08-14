@@ -3,6 +3,7 @@ const storeSubscriptionService = require("../services/storeSubscription.service"
 const { SUBSCRIPTION_STATUSES } = require("../constants/storeSubscription.constants");
 
 const SUBSCRIPTION_MESSAGE = "يرجى تجديد الاشتراك للدخول إلى لوحة المتجر";
+const PAYMENT_REQUIRED_MESSAGE = "يرجى إتمام دفع الاشتراك للدخول إلى لوحة المتجر";
 const PAYMENT_REJECTED_MESSAGE = "تم رفض بيانات الدفع. يرجى مراجعة الدفع وإعادة الإرسال.";
 
 function isSubscriptionActive(store) {
@@ -54,6 +55,16 @@ async function requireStoreSubscription(req, res, next) {
         subscriptionPaymentRejected: true,
         rejectionReason: statusPayload.period?.rejectionReason || "",
         subscriptionStatus: SUBSCRIPTION_STATUSES.PAYMENT_REJECTED,
+        monthKey: statusPayload.monthKey,
+      });
+    }
+
+    if (statusPayload.needsPayment) {
+      return res.status(403).json({
+        message: PAYMENT_REQUIRED_MESSAGE,
+        subscriptionPaymentRequired: true,
+        subscriptionStatus: statusPayload.status || SUBSCRIPTION_STATUSES.AWAITING_PAYMENT,
+        monthKey: statusPayload.monthKey,
       });
     }
 
@@ -72,5 +83,6 @@ module.exports = {
   requireStoreOwnerAccount,
   isSubscriptionActive,
   SUBSCRIPTION_MESSAGE,
+  PAYMENT_REQUIRED_MESSAGE,
   PAYMENT_REJECTED_MESSAGE,
 };

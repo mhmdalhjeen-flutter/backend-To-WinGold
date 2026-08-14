@@ -368,7 +368,7 @@ test("closeCountingPeriodsForPastMonths does not auto-close periods", async () =
   assert.equal(counting.status, BILLING_STATUSES.COUNTING);
 });
 
-test("requestSubscriptionForCompany finalizes counting and starts next cycle", async () => {
+test("requestSubscriptionForCompany finalizes counting without starting next cycle", async () => {
   const countingId = new mongoose.Types.ObjectId();
   const counting = {
     _id: countingId,
@@ -390,16 +390,13 @@ test("requestSubscriptionForCompany finalizes counting and starts next cycle", a
   assert.equal(result.finalizedMonthKey, "2026-08");
   assert.equal(result.deliveredOrderCount, 12);
   assert.equal(result.amountDue, 12);
-  assert.equal(result.nextMonthKey, "2026-09");
+  assert.equal(result.nextMonthKey, undefined);
 
   const closed = periods.get(periodKey(companyId, "2026-08"));
   assert.equal(closed.status, BILLING_STATUSES.AWAITING_PAYMENT);
   assert.equal(closed.deliveredOrderCount, 12);
 
-  const next = periods.get(periodKey(companyId, "2026-09"));
-  assert.ok(next);
-  assert.equal(next.status, BILLING_STATUSES.COUNTING);
-  assert.equal(next.deliveredOrderCount, 0);
+  assert.equal(periods.get(periodKey(companyId, "2026-09")), undefined);
 });
 
 test("requestSubscriptionForCompany is idempotent when open bill exists", async () => {

@@ -559,8 +559,6 @@ async function requestSubscriptionForCompany(companyId) {
   }
 
   const finalized = await finalizePeriodForBilling(countingPeriod);
-  const nextMonthKey = addMonthsToMonthKey(finalized.monthKey, 1);
-  const nextPeriod = await findOrCreateCountingPeriod(companyId, nextMonthKey);
 
   return {
     companyId,
@@ -568,8 +566,6 @@ async function requestSubscriptionForCompany(companyId) {
     finalizedMonthKey: finalized.monthKey,
     amountDue: finalized.amountDue ?? 0,
     deliveredOrderCount: finalized.deliveredOrderCount ?? 0,
-    nextMonthKey,
-    nextPeriod: serializePeriod(nextPeriod),
     openPeriod: serializePeriod(finalized),
   };
 }

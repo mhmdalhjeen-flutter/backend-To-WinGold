@@ -11,6 +11,7 @@ const {
   resolveStoreCardConfig,
   isOperationalStatus,
   blocksStoreAccess,
+  needsSubscriptionPayment,
   buildSubscriptionCardIssuancePlan,
 } = require("../src/services/storeSubscription.service");
 const {
@@ -121,6 +122,16 @@ tests.push(test("custom card quantities are used for future subscription periods
   assert.strictEqual(custom.digital.pointsPerCard, 3);
   assert.strictEqual(custom.paper.quantity, 200);
   assert.strictEqual(custom.paper.pointsPerCard, 2);
+}));
+
+tests.push(test("counting status allows store operation", () => {
+  assert.strictEqual(isOperationalStatus(SUBSCRIPTION_STATUSES.COUNTING), true);
+  assert.strictEqual(blocksStoreAccess(SUBSCRIPTION_STATUSES.COUNTING), false);
+}));
+
+tests.push(test("awaiting payment blocks store portal access", () => {
+  assert.strictEqual(isOperationalStatus(SUBSCRIPTION_STATUSES.AWAITING_PAYMENT), false);
+  assert.strictEqual(blocksStoreAccess(SUBSCRIPTION_STATUSES.AWAITING_PAYMENT), true);
 }));
 
 tests.push(test("approved payment status is operational", () => {

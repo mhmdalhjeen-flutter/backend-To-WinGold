@@ -3,15 +3,14 @@ const storeSubscriptionService = require("../../services/storeSubscription.servi
 const platformSubscriptionPaymentService = require("../../services/platformSubscriptionPayment.service");
 const { getPaymentTypeLabel } = require("../../utils/paymentMethodTypes.util");
 const { requireObjectId, assertNoMongoOperators } = require("../../utils/inputSecurity.util");
-const { getCurrentMonthKey } = require("../../utils/subscriptionMonth.util");
 const { buildGiftCodesExcelBuffer, buildGiftCodesExportFilename } = require("../../utils/giftCodeExcelExport.util");
 const { sendExcelDownload } = require("../../utils/excelDownload.util");
 
 exports.listSubscriptionCards = async (req, res) => {
   try {
-    const monthKey = req.query.monthKey || getCurrentMonthKey();
-    const cards = await storeSubscriptionService.listAdminSubscriptionCards(monthKey);
-    res.json({ monthKey, cards });
+    const monthKey = req.query.monthKey || null;
+    const payload = await storeSubscriptionService.listAdminSubscriptionCards(monthKey);
+    res.json(payload);
   } catch (err) {
     res.status(err.status || 500).json({ message: err.message });
   }
@@ -41,7 +40,7 @@ exports.rejectSubscriptionPayment = async (req, res) => {
 exports.exemptStoreSubscription = async (req, res) => {
   try {
     const storeId = requireObjectId(req.params.storeId, "storeId");
-    const monthKey = req.body?.monthKey || getCurrentMonthKey();
+    const monthKey = req.body?.monthKey || null;
     const period = await storeSubscriptionService.exemptStoreForMonth(storeId, req.user.id, monthKey);
     res.json({ message: "تم إعفاء المتجر لهذا الشهر", period });
   } catch (err) {
@@ -53,12 +52,21 @@ exports.exemptAllExcept = async (req, res) => {
   try {
     assertNoMongoOperators(req.body, "exemptAllExcept");
     const keepStoreIds = Array.isArray(req.body?.keepStoreIds) ? req.body.keepStoreIds : [];
-    const monthKey = req.body?.monthKey || getCurrentMonthKey();
+    const monthKey = req.body?.monthKey || null;
     const result = await storeSubscriptionService.exemptAllExcept(keepStoreIds, req.user.id, monthKey);
     res.json({
       message: `تم إعفاء ${result.exemptedCount} متجر لهذا الشهر`,
       ...result,
     });
+  } catch (err) {
+    res.status(err.status || 500).json({ message: err.message });
+  }
+};
+
+exports.requestStoreSubscriptions = async (req, res) => {
+  try {
+    const payload = await storeSubscriptionService.requestStoreSubscriptions(req.user.id);
+    res.json(payload);
   } catch (err) {
     res.status(err.status || 500).json({ message: err.message });
   }
