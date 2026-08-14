@@ -1,15 +1,11 @@
-const deliveryCompanyBillingService = require("../services/deliveryCompanyBilling.service");
 const { safeLog } = require("./logSanitize.util");
 
+/**
+ * Billing cycle closure is admin-triggered via POST /admin/delivery-subscriptions/request.
+ * This monitor intentionally does not auto-close counting periods.
+ */
 const monitorDeliveryBilling = async () => {
-  try {
-    const finalized = await deliveryCompanyBillingService.closeCountingPeriodsForPastMonths();
-    if (finalized.length) {
-      safeLog("info", "delivery_billing_periods_finalized", { count: finalized.length });
-    }
-  } catch (err) {
-    safeLog("error", "delivery_billing_monitor_failed", { message: err.message });
-  }
+  safeLog("debug", "delivery_billing_monitor_tick", { autoClose: false });
 };
 
 module.exports = { monitorDeliveryBilling };

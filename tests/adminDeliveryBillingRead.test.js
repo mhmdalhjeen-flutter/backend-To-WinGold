@@ -157,6 +157,17 @@ test("company isolation: only company A receives the handover count", async () =
     handoverAt,
     billingCountApplied: true,
   });
+  periods.set(`${String(companyB)}:${monthKey}`, {
+    _id: new mongoose.Types.ObjectId(),
+    deliveryCompany: companyB,
+    monthKey,
+    status: BILLING_STATUSES.COUNTING,
+    deliveredOrderCount: 0,
+    pricePerOrder: DEFAULT_PRICE_PER_ORDER,
+    amountDue: 0,
+    currency: "ILS",
+    closedAt: null,
+  });
 
   const payload = await listAdminBillingCards(handoverAt);
   const cardA = payload.cards.find((row) => String(row.company._id) === String(companyA));

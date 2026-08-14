@@ -1,7 +1,7 @@
 const deliveryCompanyBillingService = require("../services/deliveryCompanyBilling.service");
 
 function isBillingRoute(req) {
-  const path = String(req.originalUrl || req.path || "");
+  const path = String(req?.originalUrl || req?.path || "");
   return path.includes("/company/billing");
 }
 
@@ -15,7 +15,7 @@ async function requireDeliveryBillingAccess(req, res, next) {
     const status = await deliveryCompanyBillingService.getCompanyBillingStatus(companyId);
     req.deliveryBilling = status;
 
-    if (isBillingRoute(req.path)) {
+    if (isBillingRoute(req)) {
       return next();
     }
 

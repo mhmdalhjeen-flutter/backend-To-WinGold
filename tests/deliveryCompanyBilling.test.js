@@ -23,6 +23,9 @@ const {
   computeAmountDue,
   findOrCreateCountingPeriod,
   findBillingPeriod,
+  requestSubscriptionForCompany,
+  requestDeliverySubscriptions,
+  closeCountingPeriodsForPastMonths,
 } = require("../src/services/deliveryCompanyBilling.service");
 const { getCurrentMonthKey, addMonthsToMonthKey } = require("../src/utils/subscriptionMonth.util");
 
@@ -54,6 +57,7 @@ const originalPeriodUpdateOne = DeliveryCompanyBillingPeriod.updateOne;
 const originalPeriodCreate = DeliveryCompanyBillingPeriod.create;
 const originalPeriodFind = DeliveryCompanyBillingPeriod.find;
 const originalCompanyFindById = DeliveryCompany.findById;
+const originalCompanyFind = DeliveryCompany.find;
 const originalHandoverCount = DeliveryCompanyOrderHandover.countDocuments;
 
 function periodKey(company, monthKey) {
@@ -79,11 +83,27 @@ DeliveryCompany.findById = (id) => ({
   }),
 });
 
+DeliveryCompany.find = (query) => ({
+  select: () => ({
+    sort: () => ({
+      lean: async () => Array.from(companies.values()).filter((c) => !c.deletedAt),
+    }),
+  }),
+});
+
 DeliveryCompanyOrderHandover.countDocuments = async () => handoverCount;
 
 DeliveryCompanyBillingPeriod.findOne = (query) => {
   const exec = async () => {
     if (query._id) return periods.get(String(query._id)) || null;
+    if (query.deliveryCompany && query.status === BILLING_STATUSES.COUNTING && query.closedAt === null && !query.monthKey) {
+      const rows = Array.from(periods.values())
+        .filter((p) => String(p.deliveryCompany) === String(query.deliveryCompany)
+          && p.status === BILLING_STATUSES.COUNTING
+          && !p.closedAt)
+        .sort((a, b) => b.monthKey.localeCompare(a.monthKey));
+      return rows[0] || null;
+    }
     if (query.deliveryCompany && query.monthKey && !query.status) {
       return periods.get(periodKey(query.deliveryCompany, query.monthKey)) || null;
     }
@@ -224,7 +244,7 @@ test("finalizePeriodForBilling calculates amount and sets awaiting_payment", asy
     deliveryCompany: companyId,
     monthKey: "2026-07",
     status: BILLING_STATUSES.COUNTING,
-    deliveredOrderCount: 0,
+    deliveredOrderCount: 42,
     save: async function save() { periods.set(String(this._id), this); },
   };
   periods.set(String(periodId), period);
@@ -252,8 +272,7 @@ test("approveBillingPayment closes period and starts new counting cycle", async 
   assert.equal(approved.status, BILLING_STATUSES.PAID);
   assert.ok(approved.closedAt);
 
-  const currentMonthKey = `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, "0")}`;
-  const newPeriod = periods.get(periodKey(companyId, currentMonthKey));
+  const newPeriod = periods.get(periodKey(companyId, "2026-08"));
   assert.ok(newPeriod);
   assert.equal(newPeriod.status, BILLING_STATUSES.COUNTING);
   assert.equal(newPeriod.deliveredOrderCount, 0);
@@ -332,6 +351,115 @@ test("closing current month does not create duplicate month document", async () 
   assert.equal(periods.get(periodKey(companyId, currentMonthKey))._id, closed._id);
 });
 
+test("closeCountingPeriodsForPastMonths does not auto-close periods", async () => {
+  const counting = {
+    _id: new mongoose.Types.ObjectId(),
+    deliveryCompany: companyId,
+    monthKey: "2020-01",
+    status: BILLING_STATUSES.COUNTING,
+    deliveredOrderCount: 5,
+    closedAt: null,
+  };
+  periods.set(String(counting._id), counting);
+  periods.set(periodKey(companyId, "2020-01"), counting);
+
+  const finalized = await closeCountingPeriodsForPastMonths();
+  assert.equal(finalized.length, 0);
+  assert.equal(counting.status, BILLING_STATUSES.COUNTING);
+});
+
+test("requestSubscriptionForCompany finalizes counting and starts next cycle", async () => {
+  const countingId = new mongoose.Types.ObjectId();
+  const counting = {
+    _id: countingId,
+    deliveryCompany: companyId,
+    monthKey: "2026-08",
+    status: BILLING_STATUSES.COUNTING,
+    deliveredOrderCount: 12,
+    pricePerOrder: 1,
+    save: async function save() {
+      periods.set(String(this._id), this);
+      periods.set(periodKey(this.deliveryCompany, this.monthKey), this);
+    },
+  };
+  periods.set(String(countingId), counting);
+  periods.set(periodKey(companyId, "2026-08"), counting);
+
+  const result = await requestSubscriptionForCompany(companyId);
+  assert.equal(result.finalized, true);
+  assert.equal(result.finalizedMonthKey, "2026-08");
+  assert.equal(result.deliveredOrderCount, 12);
+  assert.equal(result.amountDue, 12);
+  assert.equal(result.nextMonthKey, "2026-09");
+
+  const closed = periods.get(periodKey(companyId, "2026-08"));
+  assert.equal(closed.status, BILLING_STATUSES.AWAITING_PAYMENT);
+  assert.equal(closed.deliveredOrderCount, 12);
+
+  const next = periods.get(periodKey(companyId, "2026-09"));
+  assert.ok(next);
+  assert.equal(next.status, BILLING_STATUSES.COUNTING);
+  assert.equal(next.deliveredOrderCount, 0);
+});
+
+test("requestSubscriptionForCompany is idempotent when open bill exists", async () => {
+  const awaiting = {
+    _id: periodId,
+    deliveryCompany: companyId,
+    monthKey: "2026-08",
+    status: BILLING_STATUSES.AWAITING_PAYMENT,
+    deliveredOrderCount: 12,
+    amountDue: 12,
+    closedAt: null,
+  };
+  const nextCounting = {
+    _id: new mongoose.Types.ObjectId(),
+    deliveryCompany: companyId,
+    monthKey: "2026-09",
+    status: BILLING_STATUSES.COUNTING,
+    deliveredOrderCount: 2,
+    closedAt: null,
+  };
+  periods.set(String(periodId), awaiting);
+  periods.set(periodKey(companyId, "2026-08"), awaiting);
+  periods.set(String(nextCounting._id), nextCounting);
+  periods.set(periodKey(companyId, "2026-09"), nextCounting);
+
+  const result = await requestSubscriptionForCompany(companyId);
+  assert.equal(result.alreadyRequested, true);
+  assert.equal(nextCounting.deliveredOrderCount, 2);
+  assert.equal(nextCounting.status, BILLING_STATUSES.COUNTING);
+});
+
+test("requestDeliverySubscriptions reports already executed on second run", async () => {
+  companies.set(String(companyId), {
+    _id: companyId,
+    name: "Test Delivery Co",
+    pricePerDeliveredOrder: DEFAULT_PRICE_PER_ORDER,
+    currency: "ILS",
+    isActive: true,
+    handedOverOrderCount: 0,
+    deletedAt: null,
+  });
+
+  const awaiting = {
+    _id: periodId,
+    deliveryCompany: companyId,
+    monthKey: "2026-08",
+    status: BILLING_STATUSES.AWAITING_PAYMENT,
+    deliveredOrderCount: 3,
+    amountDue: 3,
+    closedAt: null,
+  };
+  periods.set(String(periodId), awaiting);
+  periods.set(periodKey(companyId, "2026-08"), awaiting);
+
+  const payload = await requestDeliverySubscriptions(adminId);
+  assert.equal(payload.alreadyExecuted, true);
+  assert.equal(payload.companiesAffected, 0);
+  assert.equal(payload.companiesAlreadyRequested, 1);
+});
+
 test.after(() => {
   DeliveryCompanyBillingPeriod.findOne = originalPeriodFindOne;
   DeliveryCompanyBillingPeriod.findOneAndUpdate = originalPeriodFindOneAndUpdate;
@@ -339,6 +467,7 @@ test.after(() => {
   DeliveryCompanyBillingPeriod.create = originalPeriodCreate;
   DeliveryCompanyBillingPeriod.find = originalPeriodFind;
   DeliveryCompany.findById = originalCompanyFindById;
+  DeliveryCompany.find = originalCompanyFind;
   DeliveryCompanyOrderHandover.countDocuments = originalHandoverCount;
   mongoose.startSession = originalStartSession;
 });

@@ -81,16 +81,27 @@ DeliveryCompany.findById = (id) => ({
 
 DeliveryCompanyBillingPeriod.findOne = (query) => {
   const exec = async () => {
+    if (query.deliveryCompany && query.status === BILLING_STATUSES.COUNTING && query.closedAt === null && !query.monthKey) {
+      const rows = Array.from(periods.values())
+        .filter((p) => String(p.deliveryCompany) === String(query.deliveryCompany)
+          && p.status === BILLING_STATUSES.COUNTING
+          && !p.closedAt)
+        .sort((a, b) => b.monthKey.localeCompare(a.monthKey));
+      return rows[0] || null;
+    }
     if (query.deliveryCompany && query.monthKey) {
       return periods.get(periodStorageKey(query.deliveryCompany, query.monthKey)) || null;
     }
     if (query.deliveryCompany && query.status) {
       const rows = Array.from(periods.values()).filter(
         (p) => String(p.deliveryCompany) === String(query.deliveryCompany)
-          && (!query.status.$in || query.status.$in.includes(p.status))
+          && (query.status.$in ? query.status.$in.includes(p.status) : p.status === query.status)
           && (query.closedAt === null ? !p.closedAt : true),
       );
-      return rows.sort((a, b) => a.monthKey.localeCompare(b.monthKey))[0] || null;
+      if (query.status.$in) {
+        return rows.sort((a, b) => a.monthKey.localeCompare(b.monthKey))[0] || null;
+      }
+      return rows.sort((a, b) => b.monthKey.localeCompare(a.monthKey))[0] || null;
     }
     return null;
   };

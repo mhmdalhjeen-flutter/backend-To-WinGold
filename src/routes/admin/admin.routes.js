@@ -553,6 +553,7 @@ router.patch("/subscription-payment-methods/:accountId/activate", storeSubscript
 router.delete("/subscription-payment-methods/:accountId", sensitiveAuth, storeSubscriptionAdmin.deletePlatformPaymentAccount);
 
 // ─── اشتراك شركات التوصيل الشهري ─────────────────────────────────────────────
+router.post("/delivery-subscriptions/request", sensitiveAuth, deliveryBillingAdmin.requestDeliverySubscriptions);
 router.get("/delivery-subscriptions", deliveryBillingAdmin.listBillingCards);
 router.patch("/delivery-subscriptions/periods/:periodId/approve", sensitiveAuth, deliveryBillingAdmin.approveBillingPayment);
 router.patch("/delivery-subscriptions/periods/:periodId/reject", sensitiveAuth, deliveryBillingAdmin.rejectBillingPayment);

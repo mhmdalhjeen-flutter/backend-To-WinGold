@@ -98,3 +98,15 @@ exports.listPlatformPaymentMethods = async (_req, res) => {
     res.status(err.status || 500).json({ message: err.message });
   }
 };
+
+exports.requestDeliverySubscriptions = async (req, res) => {
+  try {
+    const payload = await deliveryCompanyBillingService.requestDeliverySubscriptions(req.user.id);
+    res.json({
+      ...payload,
+      message: payload.message,
+    });
+  } catch (err) {
+    res.status(err.status || 500).json({ message: err.message });
+  }
+};
