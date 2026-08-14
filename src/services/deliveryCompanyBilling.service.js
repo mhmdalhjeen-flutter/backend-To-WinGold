@@ -18,12 +18,21 @@ const { parseSubscriptionPaymentSubmission, serializePaymentForOwner } = require
 const billingNotification = require("./deliveryCompanyBillingNotification.service");
 const { getPaymentTypeLabel } = require("../utils/paymentMethodTypes.util");
 const { safeLog } = require("../utils/logSanitize.util");
+const { getActiveSimulation } = require("./deliveryCompanyBillingSimulation.service");
+const { isBillingSimulationAllowed } = require("../utils/deliveryBillingSimulation.util");
 
 const CLOSED_SET = new Set(CLOSED_BILLING_STATUSES);
 const BILLING_INCREMENT_MAX_ATTEMPTS = 3;
 
 function isMongoDuplicateKeyError(err) {
   return err?.code === 11000;
+}
+
+function scopeMatch(simulationSessionId) {
+  if (simulationSessionId) {
+    return { simulationSessionId };
+  }
+  return { $or: [{ simulationSessionId: null }, { simulationSessionId: { $exists: false } }] };
 }
 
 function computeAmountDue(count, pricePerOrder) {
@@ -54,10 +63,11 @@ async function countHandoversInMonth(companyId, monthKey) {
   });
 }
 
-async function findBillingPeriod(companyId, monthKey, session = null) {
+async function findBillingPeriod(companyId, monthKey, session = null, simulationSessionId = null) {
   return DeliveryCompanyBillingPeriod.findOne({
     deliveryCompany: companyId,
     monthKey,
+    ...scopeMatch(simulationSessionId),
   }).session(session || null);
 }
 
@@ -65,8 +75,8 @@ async function findBillingPeriod(companyId, monthKey, session = null) {
  * Atomically get or create the single billing-period document for company+monthKey.
  * Safe under concurrent handover increments (unique index on deliveryCompany+monthKey).
  */
-async function findOrCreateCountingPeriod(companyId, monthKey, session = null) {
-  const existing = await findBillingPeriod(companyId, monthKey, session);
+async function findOrCreateCountingPeriod(companyId, monthKey, session = null, simulationSessionId = null) {
+  const existing = await findBillingPeriod(companyId, monthKey, session, simulationSessionId);
   if (existing) return existing;
 
   const { pricePerOrder, currency } = await getCompanyBillingConfig(companyId);
@@ -77,13 +87,16 @@ async function findOrCreateCountingPeriod(companyId, monthKey, session = null) {
     ...(session ? { session } : {}),
   };
 
+  const scope = scopeMatch(simulationSessionId);
+
   try {
     const created = await DeliveryCompanyBillingPeriod.findOneAndUpdate(
-      { deliveryCompany: companyId, monthKey },
+      { deliveryCompany: companyId, monthKey, ...scope },
       {
         $setOnInsert: {
           deliveryCompany: companyId,
           monthKey,
+          simulationSessionId: simulationSessionId || null,
           status: BILLING_STATUSES.COUNTING,
           deliveredOrderCount: 0,
           pricePerOrder,
@@ -103,7 +116,7 @@ async function findOrCreateCountingPeriod(companyId, monthKey, session = null) {
     });
   }
 
-  const period = await findBillingPeriod(companyId, monthKey, session);
+  const period = await findBillingPeriod(companyId, monthKey, session, simulationSessionId);
   if (!period) {
     const err = new Error("فشل إنشاء فترة الفوترة");
     err.status = 500;
@@ -116,14 +129,14 @@ async function findOrCreateCountingPeriod(companyId, monthKey, session = null) {
   return period;
 }
 
-async function ensureCountingPeriod(companyId, monthKey, session = null) {
-  const existing = await findBillingPeriod(companyId, monthKey, session);
+async function ensureCountingPeriod(companyId, monthKey, session = null, simulationSessionId = null) {
+  const existing = await findBillingPeriod(companyId, monthKey, session, simulationSessionId);
   if (existing) {
     if (existing.status === BILLING_STATUSES.COUNTING) return existing;
     if (!CLOSED_SET.has(existing.status)) return existing;
     return existing;
   }
-  return findOrCreateCountingPeriod(companyId, monthKey, session);
+  return findOrCreateCountingPeriod(companyId, monthKey, session, simulationSessionId);
 }
 
 async function incrementHandoverCount(companyId, handoverAt = new Date()) {
@@ -135,6 +148,7 @@ async function incrementHandoverCount(companyId, handoverAt = new Date()) {
     const period = await DeliveryCompanyBillingPeriod.findOne({
       deliveryCompany: companyId,
       monthKey,
+      ...scopeMatch(null),
     });
 
     if (period && CLOSED_SET.has(period.status)) {
@@ -147,7 +161,7 @@ async function incrementHandoverCount(companyId, handoverAt = new Date()) {
 
     let countingPeriod = period;
     try {
-      countingPeriod = period || await ensureCountingPeriod(companyId, monthKey);
+      countingPeriod = period || await ensureCountingPeriod(companyId, monthKey, null, null);
     } catch (err) {
       if (!isMongoDuplicateKeyError(err)) throw err;
       safeLog("info", "delivery_billing_period_race_resolved", {
@@ -156,7 +170,7 @@ async function incrementHandoverCount(companyId, handoverAt = new Date()) {
         phase: "increment_ensure",
         attempt,
       });
-      countingPeriod = await findBillingPeriod(companyId, monthKey);
+      countingPeriod = await findBillingPeriod(companyId, monthKey, null, null);
       if (!countingPeriod) throw err;
     }
 
@@ -224,6 +238,7 @@ async function closeCountingPeriodsForPastMonths(date = new Date()) {
   const countingPeriods = await DeliveryCompanyBillingPeriod.find({
     status: BILLING_STATUSES.COUNTING,
     monthKey: { $lt: currentMonthKey },
+    ...scopeMatch(null),
   });
 
   const finalized = [];
@@ -233,15 +248,16 @@ async function closeCountingPeriodsForPastMonths(date = new Date()) {
   return finalized;
 }
 
-async function findOldestOpenBillingPeriod(companyId) {
+async function findOldestOpenBillingPeriod(companyId, simulationSessionId = null) {
   return DeliveryCompanyBillingPeriod.findOne({
     deliveryCompany: companyId,
     status: { $in: OPEN_BILLING_STATUSES },
     closedAt: null,
+    ...scopeMatch(simulationSessionId),
   }).sort({ monthKey: 1 });
 }
 
-async function startNewCountingCycleAfterClose(companyId, session, closedMonthKey) {
+async function startNewCountingCycleAfterClose(companyId, session, closedMonthKey, simulationSessionId = null) {
   const currentMonthKey = getCurrentMonthKey();
   const closedKey = closedMonthKey || currentMonthKey;
 
@@ -251,10 +267,10 @@ async function startNewCountingCycleAfterClose(companyId, session, closedMonthKe
     targetMonthKey = addMonthsToMonthKey(closedKey, 1);
   }
 
-  const targetExisting = await findBillingPeriod(companyId, targetMonthKey, session);
+  const targetExisting = await findBillingPeriod(companyId, targetMonthKey, session, simulationSessionId);
   if (targetExisting) return targetExisting;
 
-  return findOrCreateCountingPeriod(companyId, targetMonthKey, session);
+  return findOrCreateCountingPeriod(companyId, targetMonthKey, session, simulationSessionId);
 }
 
 async function completeBillingCycle(periodId, adminId, { outcome }) {
@@ -297,13 +313,20 @@ async function completeBillingCycle(periodId, adminId, { outcome }) {
       throw err;
     }
 
-    await startNewCountingCycleAfterClose(period.deliveryCompany, session, period.monthKey);
+    await startNewCountingCycleAfterClose(
+      period.deliveryCompany,
+      session,
+      period.monthKey,
+      period.simulationSessionId || null,
+    );
     await session.commitTransaction();
 
-    if (outcome === "paid") {
-      await billingNotification.notifyBillingVerified(period.deliveryCompany, period);
-    } else {
-      await billingNotification.notifyBillingExempted(period.deliveryCompany, period);
+    if (!period.simulationSessionId) {
+      if (outcome === "paid") {
+        await billingNotification.notifyBillingVerified(period.deliveryCompany, period);
+      } else {
+        await billingNotification.notifyBillingExempted(period.deliveryCompany, period);
+      }
     }
 
     return period;
@@ -343,7 +366,9 @@ async function rejectBillingPayment(periodId, adminId, reason = "") {
     throw err;
   }
 
-  await billingNotification.notifyBillingRejected(period.deliveryCompany, period, period.rejectionReason);
+  if (!period.simulationSessionId) {
+    await billingNotification.notifyBillingRejected(period.deliveryCompany, period, period.rejectionReason);
+  }
   return period;
 }
 
@@ -352,15 +377,19 @@ async function exemptBillingPeriod(periodId, adminId) {
 }
 
 async function submitBillingPayment(companyId, body = {}, periodId = null) {
+  const simSession = await getActiveSimulation(companyId);
+  const simulationSessionId = simSession?._id || null;
+
   let period = null;
   if (periodId) {
     period = await DeliveryCompanyBillingPeriod.findOne({
       _id: periodId,
       deliveryCompany: companyId,
       closedAt: null,
+      ...scopeMatch(simulationSessionId),
     });
   } else {
-    period = await findOldestOpenBillingPeriod(companyId);
+    period = await findOldestOpenBillingPeriod(companyId, simulationSessionId);
   }
 
   if (!period) {
@@ -387,7 +416,9 @@ async function submitBillingPayment(companyId, body = {}, periodId = null) {
   period.reviewedAt = null;
   await period.save();
 
-  await billingNotification.notifyBillingSubmitted(companyId, period);
+  if (!period.simulationSessionId) {
+    await billingNotification.notifyBillingSubmitted(companyId, period);
+  }
   return period;
 }
 
@@ -412,7 +443,7 @@ function serializePeriod(period) {
   };
 }
 
-function buildBillingStatusPayload(company, periods = {}, monthKeys = {}) {
+function buildBillingStatusPayload(company, periods = {}, monthKeys = {}, meta = {}) {
   const {
     currentPeriod,
     previousPeriod,
@@ -444,13 +475,18 @@ function buildBillingStatusPayload(company, periods = {}, monthKeys = {}) {
       BILLING_STATUSES.AWAITING_PAYMENT,
       BILLING_STATUSES.PAYMENT_REJECTED,
     ].includes(openPeriod.status)),
-    canOperate: !rejectedPeriod,
+    canOperate: !(openPeriod && [
+      BILLING_STATUSES.AWAITING_PAYMENT,
+      BILLING_STATUSES.PAYMENT_REJECTED,
+    ].includes(openPeriod.status)),
     lifetimeHandoverCount: company.handedOverOrderCount ?? 0,
+    simulationAvailable: Boolean(meta.simulationAvailable),
+    simulationActive: Boolean(meta.simulationActive),
   };
 }
 
 async function reconcileCountingPeriodFromLedger(companyId, monthKey) {
-  const period = await findBillingPeriod(companyId, monthKey);
+  const period = await findBillingPeriod(companyId, monthKey, null, null);
   if (!period || period.status !== BILLING_STATUSES.COUNTING) {
     return period;
   }
@@ -468,13 +504,31 @@ async function reconcileCountingPeriodFromLedger(companyId, monthKey) {
     { $set: { deliveredOrderCount: ledgerCount, amountDue } },
   );
 
-  return findBillingPeriod(companyId, monthKey);
+  return findBillingPeriod(companyId, monthKey, null, null);
 }
 
 async function getCompanyBillingStatus(companyId, date = new Date()) {
   const { company } = await getCompanyBillingConfig(companyId);
-  const currentMonthKey = getCurrentMonthKey(date);
-  const previousMonthKey = getPreviousMonthKey(date);
+  const simSession = await getActiveSimulation(companyId);
+  const simulationSessionId = simSession?._id || null;
+
+  let currentMonthKey;
+  let previousMonthKey;
+  if (simSession) {
+    currentMonthKey = simSession.countingMonthKey;
+    previousMonthKey = simSession.closedMonthKey;
+  } else {
+    currentMonthKey = getCurrentMonthKey(date);
+    previousMonthKey = getPreviousMonthKey(date);
+  }
+
+  const scope = scopeMatch(simulationSessionId);
+  const handoverCountPromises = simulationSessionId
+    ? [Promise.resolve(0), Promise.resolve(0)]
+    : [
+      countHandoversInMonth(companyId, currentMonthKey),
+      countHandoversInMonth(companyId, previousMonthKey),
+    ];
 
   const [
     currentPeriod,
@@ -484,35 +538,50 @@ async function getCompanyBillingStatus(companyId, date = new Date()) {
     currentHandoverCount,
     previousHandoverCount,
   ] = await Promise.all([
-    DeliveryCompanyBillingPeriod.findOne({ deliveryCompany: companyId, monthKey: currentMonthKey }).lean(),
-    DeliveryCompanyBillingPeriod.findOne({ deliveryCompany: companyId, monthKey: previousMonthKey }).lean(),
-    findOldestOpenBillingPeriod(companyId),
+    DeliveryCompanyBillingPeriod.findOne({ deliveryCompany: companyId, monthKey: currentMonthKey, ...scope }).lean(),
+    DeliveryCompanyBillingPeriod.findOne({ deliveryCompany: companyId, monthKey: previousMonthKey, ...scope }).lean(),
+    findOldestOpenBillingPeriod(companyId, simulationSessionId),
     DeliveryCompanyBillingPeriod.findOne({
       deliveryCompany: companyId,
       status: BILLING_STATUSES.PAYMENT_REJECTED,
       closedAt: null,
+      ...scope,
     }).sort({ monthKey: 1 }).lean(),
-    countHandoversInMonth(companyId, currentMonthKey),
-    countHandoversInMonth(companyId, previousMonthKey),
+    ...handoverCountPromises,
   ]);
 
-  if (!currentPeriod) {
+  if (!simulationSessionId && !currentPeriod) {
     await findOrCreateCountingPeriod(companyId, currentMonthKey);
   }
 
   const refreshedCurrent = currentPeriod
-    || await DeliveryCompanyBillingPeriod.findOne({ deliveryCompany: companyId, monthKey: currentMonthKey }).lean();
+    || (!simulationSessionId
+      ? await DeliveryCompanyBillingPeriod.findOne({ deliveryCompany: companyId, monthKey: currentMonthKey, ...scope }).lean()
+      : null);
+
+  const resolvedCurrentCount = simulationSessionId
+    ? (refreshedCurrent?.deliveredOrderCount ?? 0)
+    : currentHandoverCount;
+  const resolvedPreviousCount = simulationSessionId
+    ? (previousPeriod?.deliveredOrderCount ?? 0)
+    : previousHandoverCount;
 
   return buildBillingStatusPayload(company, {
-    currentPeriod: periodWithHandoverCount(refreshedCurrent, currentMonthKey, currentHandoverCount),
-    previousPeriod: periodWithHandoverCount(previousPeriod, previousMonthKey, previousHandoverCount),
+    currentPeriod: periodWithHandoverCount(refreshedCurrent, currentMonthKey, resolvedCurrentCount),
+    previousPeriod: periodWithHandoverCount(previousPeriod, previousMonthKey, resolvedPreviousCount),
     openPeriod: openPeriod?.toObject ? openPeriod.toObject() : openPeriod,
     rejectedPeriod,
-  }, { currentMonthKey, previousMonthKey });
+  }, { currentMonthKey, previousMonthKey }, {
+    simulationAvailable: isBillingSimulationAllowed(),
+    simulationActive: Boolean(simSession),
+  });
 }
 
 async function listBillingHistory(companyId, { limit = 24 } = {}) {
-  const periods = await DeliveryCompanyBillingPeriod.find({ deliveryCompany: companyId })
+  const periods = await DeliveryCompanyBillingPeriod.find({
+    deliveryCompany: companyId,
+    ...scopeMatch(null),
+  })
     .sort({ monthKey: -1 })
     .limit(Math.min(limit, 60))
     .lean();
@@ -556,10 +625,15 @@ async function listAdminBillingCards(date = new Date()) {
   ]);
 
   const allPeriods = await DeliveryCompanyBillingPeriod.find({
-    deliveryCompany: { $in: companyIds },
-    $or: [
-      { monthKey: { $in: [currentMonthKey, previousMonthKey] } },
-      { status: { $in: [...OPEN_BILLING_STATUSES, BILLING_STATUSES.PAYMENT_PENDING] }, closedAt: null },
+    $and: [
+      { deliveryCompany: { $in: companyIds } },
+      scopeMatch(null),
+      {
+        $or: [
+          { monthKey: { $in: [currentMonthKey, previousMonthKey] } },
+          { status: { $in: [...OPEN_BILLING_STATUSES, BILLING_STATUSES.PAYMENT_PENDING] }, closedAt: null },
+        ],
+      },
     ],
   }).lean();
 

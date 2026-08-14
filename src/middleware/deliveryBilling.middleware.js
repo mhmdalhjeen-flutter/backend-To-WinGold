@@ -19,11 +19,16 @@ async function requireDeliveryBillingAccess(req, res, next) {
       return next();
     }
 
-    if (status.paymentRejected) {
+    if (status.needsPayment) {
+      const rejected = Boolean(status.paymentRejected);
       return res.status(403).json({
-        message: "تم رفض دفع الاشتراك — يرجى تصحيح بيانات الدفع",
+        message: rejected
+          ? "تم رفض دفع الاشتراك — يرجى تصحيح بيانات الدفع"
+          : "مطلوب دفع الاشتراك الشهري قبل متابعة استخدام البوابة",
         billingStatus: status.billingStatus,
-        code: "billing_payment_rejected",
+        code: rejected ? "billing_payment_rejected" : "billing_payment_required",
+        needsPayment: true,
+        canOperate: false,
       });
     }
 

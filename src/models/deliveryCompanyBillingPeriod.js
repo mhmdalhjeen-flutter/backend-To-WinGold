@@ -45,9 +45,19 @@ const deliveryCompanyBillingPeriodSchema = new mongoose.Schema({
   exemptedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
   exemptedAt: { type: Date, default: null },
   closedAt: { type: Date, default: null },
+  /** null = real production billing; set during isolated billing simulations only */
+  simulationSessionId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: "DeliveryCompanyBillingSimulation",
+    default: null,
+    index: true,
+  },
 }, { timestamps: true });
 
-deliveryCompanyBillingPeriodSchema.index({ deliveryCompany: 1, monthKey: 1 }, { unique: true });
+deliveryCompanyBillingPeriodSchema.index(
+  { deliveryCompany: 1, monthKey: 1, simulationSessionId: 1 },
+  { unique: true },
+);
 deliveryCompanyBillingPeriodSchema.index({ monthKey: 1, status: 1 });
 deliveryCompanyBillingPeriodSchema.index({ deliveryCompany: 1, status: 1, closedAt: 1 });
 

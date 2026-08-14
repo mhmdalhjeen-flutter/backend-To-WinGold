@@ -65,3 +65,37 @@ exports.getBillingHistory = async (req, res) => {
     res.status(err.status || 500).json({ message: err.message });
   }
 };
+
+exports.startBillingSimulation = async (req, res) => {
+  try {
+    const companyId = resolveCompanyId(req);
+    const simulationService = require("../services/deliveryCompanyBillingSimulation.service");
+    await simulationService.startBillingSimulation(companyId, req.user?.id);
+    const status = await deliveryCompanyBillingService.getCompanyBillingStatus(companyId);
+    const paymentPeriod = status.openPeriod || status.previousPeriod;
+    res.json({
+      message: "تم بدء محاكاة بداية شهر جديد",
+      ...status,
+      payment: serializePaymentForOwner(paymentPeriod),
+    });
+  } catch (err) {
+    res.status(err.status || 500).json({ message: err.message });
+  }
+};
+
+exports.resetBillingSimulation = async (req, res) => {
+  try {
+    const companyId = resolveCompanyId(req);
+    const simulationService = require("../services/deliveryCompanyBillingSimulation.service");
+    await simulationService.resetBillingSimulation(companyId);
+    const status = await deliveryCompanyBillingService.getCompanyBillingStatus(companyId);
+    const paymentPeriod = status.openPeriod || status.previousPeriod;
+    res.json({
+      message: "تم حذف المحاكاة واستعادة الحالة الحقيقية",
+      ...status,
+      payment: serializePaymentForOwner(paymentPeriod),
+    });
+  } catch (err) {
+    res.status(err.status || 500).json({ message: err.message });
+  }
+};
