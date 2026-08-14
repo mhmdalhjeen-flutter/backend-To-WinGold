@@ -678,22 +678,19 @@ async function updateOrderStatusCore(ownerId, orderId, status, session, options 
       throw err;
     }
 
-    await ensureStoreHandoverBillingRecorded(order._id, {
-      previousStatus: "ready_for_driver_pickup",
-      storeId: store._id,
-      confirmedBy: ownerId,
-      committedOrder: order,
-    });
-
-    // Session advance + notifications: updateOrderStatus → syncDeliverySessionAfterOrderUpdate
-    // (syncAfterStoreHandover). Do not also fire syncOrderInSessions — it races and can
-    // overwrite out_for_delivery back to driver_assigned.
+    // Handover ledger/billing runs after commit in updateOrderStatus() — not here
+    // (avoid Order.updateOne outside txn while Order row is locked in txn).
 
     return {
       message: "تم تسليم الطلب للسائق — اكتملت مسؤولية المتجر",
       order,
       cards: store.cards,
       bypassCards: store.bypassCards,
+      postCommitHandover: {
+        previousStatus: "ready_for_driver_pickup",
+        storeId: store._id,
+        confirmedBy: ownerId,
+      },
     };
   }
 
@@ -954,6 +951,15 @@ async function ensureStoreHandoverBillingRecorded(orderId, handoverOptions = {})
   return lastResult;
 }
 
+async function runPostCommitHandoverIfNeeded(result) {
+  const handover = result?.postCommitHandover;
+  if (!handover || !result?.order?._id) return null;
+  return ensureStoreHandoverBillingRecorded(result.order._id, {
+    ...handover,
+    committedOrder: result.order,
+  });
+}
+
 /** Sync delivery session after order status commit — routes handoff vs generic sync. */
 async function syncDeliverySessionAfterOrderUpdate(order) {
   if (!order?._id) return;
@@ -984,6 +990,7 @@ async function updateOrderStatus(ownerId, orderId, status, options = {}) {
     session.startTransaction();
     const result = await updateOrderStatusCore(ownerId, orderId, status, session, options);
     await session.commitTransaction();
+    await runPostCommitHandoverIfNeeded(result);
     if (result?.order?._id) {
       await syncDeliverySessionAfterOrderUpdate(result.order);
     }
@@ -992,6 +999,7 @@ async function updateOrderStatus(ownerId, orderId, status, options = {}) {
     await session.abortTransaction().catch(() => {});
     if (isTransactionUnsupported(err)) {
       const result = await updateOrderStatusCore(ownerId, orderId, status, null, options);
+      await runPostCommitHandoverIfNeeded(result);
       if (result?.order?._id) {
         await syncDeliverySessionAfterOrderUpdate(result.order);
       }
