@@ -60,7 +60,7 @@ async function releaseBillingIncrementClaim(orderId) {
 
 /**
  * Atomically claim and apply one billing-period increment for a handover row.
- * Safe under duplicate handover requests and retriable after transient billing failures.
+ * billingCountApplied stays true only after a successful period increment.
  */
 async function applyBillingIncrementForHandover(orderId, companyId, handoverAt) {
   const claimed = await DeliveryCompanyOrderHandover.findOneAndUpdate(
@@ -74,25 +74,34 @@ async function applyBillingIncrementForHandover(orderId, companyId, handoverAt) 
   const deliveryCompanyBillingService = require("./deliveryCompanyBilling.service");
   try {
     const billingResult = await deliveryCompanyBillingService.incrementHandoverCount(companyId, handoverAt);
-    if (!billingResult?.incremented && !BILLING_SKIP_REASONS.has(billingResult?.reason)) {
-      await releaseBillingIncrementClaim(orderId);
-      safeLog("error", "delivery_billing_increment_failed", {
-        companyId: String(companyId),
-        orderId: String(orderId),
-        reason: billingResult?.reason || "unknown",
-        monthKey: billingResult?.monthKey,
-      });
-      return { applied: false, reason: billingResult?.reason || "increment_failed" };
-    }
     if (!billingResult?.incremented) {
-      safeLog("info", "delivery_billing_increment_not_applied", {
+      await releaseBillingIncrementClaim(orderId);
+      const reason = billingResult?.reason || "increment_failed";
+      const level = BILLING_SKIP_REASONS.has(reason) ? "info" : "error";
+      safeLog(level, "delivery_billing_increment_not_applied", {
         companyId: String(companyId),
         orderId: String(orderId),
-        reason: billingResult?.reason,
+        reason,
         monthKey: billingResult?.monthKey,
       });
+      return { applied: false, reason };
     }
-    return { applied: Boolean(billingResult?.incremented), billingResult };
+
+    if (billingResult.monthKey) {
+      await deliveryCompanyBillingService.reconcileCountingPeriodFromLedger(
+        companyId,
+        billingResult.monthKey,
+      ).catch((err) => {
+        safeLog("warn", "delivery_billing_reconcile_failed", {
+          companyId: String(companyId),
+          orderId: String(orderId),
+          monthKey: billingResult.monthKey,
+          message: err?.message,
+        });
+      });
+    }
+
+    return { applied: true, billingResult };
   } catch (billingErr) {
     await releaseBillingIncrementClaim(orderId);
     safeLog("error", "delivery_billing_increment_failed", {

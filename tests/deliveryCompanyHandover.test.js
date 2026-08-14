@@ -11,12 +11,15 @@ const DeliverySession = require("../src/models/deliverySession");
 const Order = require("../src/models/order");
 
 const billingServicePath = require.resolve("../src/services/deliveryCompanyBilling.service");
+let billingIncrementBehavior = { incremented: true };
+
 require.cache[billingServicePath] = {
   id: billingServicePath,
   filename: billingServicePath,
   loaded: true,
   exports: {
-    incrementHandoverCount: async () => ({ incremented: true }),
+    incrementHandoverCount: async () => ({ ...billingIncrementBehavior, monthKey: "2026-01" }),
+    reconcileCountingPeriodFromLedger: async () => null,
   },
 };
 
@@ -55,6 +58,7 @@ function resetState() {
   handoverCounts.set(String(companyA), 0);
   handoverCounts.set(String(companyB), 0);
   handoverRecords.clear();
+  billingIncrementBehavior = { incremented: true };
 }
 
 function mockOrder(orderId, {
@@ -272,6 +276,28 @@ test("does not count when order has no delivery session", async () => {
       }),
     };
   };
+});
+
+test("billing increment failure leaves ledger recoverable for retry", async () => {
+  resetState();
+  billingIncrementBehavior = { incremented: false, reason: "billing_frozen" };
+
+  const first = await recordStoreHandoverToDeliveryCompany(order1, {
+    previousStatus: REQUIRED_PREVIOUS_STATUS,
+  });
+  assert.equal(first.recorded, true);
+  assert.equal(first.billingApplied, false);
+  assert.equal(handoverRecords.get(String(order1))?.billingCountApplied, false);
+
+  billingIncrementBehavior = { incremented: true };
+
+  const retry = await recordStoreHandoverToDeliveryCompany(order1, {
+    previousStatus: REQUIRED_PREVIOUS_STATUS,
+  });
+  assert.equal(retry.recorded, false);
+  assert.equal(retry.reason, "already_recorded");
+  assert.equal(retry.billingRecovered, true);
+  assert.equal(handoverRecords.get(String(order1))?.billingCountApplied, true);
 });
 
 test.after(() => {

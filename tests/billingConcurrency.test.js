@@ -68,7 +68,22 @@ function resetBillingMocks() {
     }),
   });
 
-  DeliveryCompanyOrderHandover.countDocuments = async () => 0;
+  DeliveryCompanyOrderHandover.countDocuments = async (query) => {
+    const { getMonthBounds } = require("../src/utils/billingMonth.util");
+    let rows = Array.from(handoverRecords.values());
+    if (query.deliveryCompany) {
+      rows = rows.filter((h) => String(h.deliveryCompany) === String(query.deliveryCompany));
+    }
+    if (query.handoverAt?.$gte || query.handoverAt?.$lt) {
+      rows = rows.filter((h) => {
+        const at = new Date(h.handoverAt).getTime();
+        if (query.handoverAt.$gte && at < new Date(query.handoverAt.$gte).getTime()) return false;
+        if (query.handoverAt.$lt && at >= new Date(query.handoverAt.$lt).getTime()) return false;
+        return true;
+      });
+    }
+    return rows.length;
+  };
 
   DeliveryCompanyBillingPeriod.findOne = (query) => {
     const exec = async () => {
@@ -94,6 +109,9 @@ function resetBillingMocks() {
     if (update.$inc?.deliveredOrderCount) {
       period.deliveredOrderCount = (period.deliveredOrderCount || 0) + update.$inc.deliveredOrderCount;
       billingIncrementCalls += 1;
+    }
+    if (update.$set) {
+      Object.assign(period, update.$set);
     }
     return { modifiedCount: 1 };
   };
@@ -385,6 +403,35 @@ test("handover to company A does not increment company B billing period", async 
   assert.ok(periods.get(periodKey(companyB, "2026-08")));
   assert.equal(periods.get(periodKey(companyB, "2026-08")).deliveredOrderCount, 1);
   assert.equal(periods.get(periodKey(companyId, "2026-08"))?.deliveredOrderCount || 0, 0);
+});
+
+test("billing increment skipped for closed period leaves handover recoverable", async () => {
+  resetBillingMocks();
+  resetHandoverMocks();
+
+  const closedMonth = "2026-08";
+  const periodId = new mongoose.Types.ObjectId();
+  periods.set(periodKey(companyId, closedMonth), {
+    _id: periodId,
+    deliveryCompany: companyId,
+    monthKey: closedMonth,
+    status: BILLING_STATUSES.PAID,
+    deliveredOrderCount: 3,
+    pricePerOrder: DEFAULT_PRICE_PER_ORDER,
+    amountDue: 3 * DEFAULT_PRICE_PER_ORDER,
+    currency: "ILS",
+    closedAt: new Date(),
+  });
+  periods.set(String(periodId), periods.get(periodKey(companyId, closedMonth)));
+
+  const result = await recordStoreHandoverToDeliveryCompany(orderId, {
+    previousStatus: REQUIRED_PREVIOUS_STATUS,
+  });
+
+  assert.equal(result.recorded, true);
+  assert.equal(result.billingApplied, false);
+  assert.equal(handoverRecords.get(String(orderId))?.billingCountApplied, false);
+  assert.equal(periods.get(periodKey(companyId, closedMonth)).deliveredOrderCount, 3);
 });
 
 test("concurrent store subscription period creation resolves to one document", async () => {

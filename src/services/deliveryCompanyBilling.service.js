@@ -449,12 +449,41 @@ function buildBillingStatusPayload(company, periods = {}, monthKeys = {}) {
   };
 }
 
+async function reconcileCountingPeriodFromLedger(companyId, monthKey) {
+  const period = await findBillingPeriod(companyId, monthKey);
+  if (!period || period.status !== BILLING_STATUSES.COUNTING) {
+    return period;
+  }
+
+  const ledgerCount = await countHandoversInMonth(companyId, monthKey);
+  const pricePerOrder = Number(period.pricePerOrder ?? DEFAULT_PRICE_PER_ORDER);
+  const amountDue = computeAmountDue(ledgerCount, pricePerOrder);
+
+  if (period.deliveredOrderCount === ledgerCount && period.amountDue === amountDue) {
+    return period;
+  }
+
+  await DeliveryCompanyBillingPeriod.updateOne(
+    { _id: period._id, status: BILLING_STATUSES.COUNTING },
+    { $set: { deliveredOrderCount: ledgerCount, amountDue } },
+  );
+
+  return findBillingPeriod(companyId, monthKey);
+}
+
 async function getCompanyBillingStatus(companyId, date = new Date()) {
   const { company } = await getCompanyBillingConfig(companyId);
   const currentMonthKey = getCurrentMonthKey(date);
   const previousMonthKey = getPreviousMonthKey(date);
 
-  const [currentPeriod, previousPeriod, openPeriod, rejectedPeriod] = await Promise.all([
+  const [
+    currentPeriod,
+    previousPeriod,
+    openPeriod,
+    rejectedPeriod,
+    currentHandoverCount,
+    previousHandoverCount,
+  ] = await Promise.all([
     DeliveryCompanyBillingPeriod.findOne({ deliveryCompany: companyId, monthKey: currentMonthKey }).lean(),
     DeliveryCompanyBillingPeriod.findOne({ deliveryCompany: companyId, monthKey: previousMonthKey }).lean(),
     findOldestOpenBillingPeriod(companyId),
@@ -463,6 +492,8 @@ async function getCompanyBillingStatus(companyId, date = new Date()) {
       status: BILLING_STATUSES.PAYMENT_REJECTED,
       closedAt: null,
     }).sort({ monthKey: 1 }).lean(),
+    countHandoversInMonth(companyId, currentMonthKey),
+    countHandoversInMonth(companyId, previousMonthKey),
   ]);
 
   if (!currentPeriod) {
@@ -473,8 +504,8 @@ async function getCompanyBillingStatus(companyId, date = new Date()) {
     || await DeliveryCompanyBillingPeriod.findOne({ deliveryCompany: companyId, monthKey: currentMonthKey }).lean();
 
   return buildBillingStatusPayload(company, {
-    currentPeriod: refreshedCurrent,
-    previousPeriod,
+    currentPeriod: periodWithHandoverCount(refreshedCurrent, currentMonthKey, currentHandoverCount),
+    previousPeriod: periodWithHandoverCount(previousPeriod, previousMonthKey, previousHandoverCount),
     openPeriod: openPeriod?.toObject ? openPeriod.toObject() : openPeriod,
     rejectedPeriod,
   }, { currentMonthKey, previousMonthKey });
@@ -631,4 +662,6 @@ module.exports = {
   findBillingPeriod,
   countHandoversInMonth,
   computeAmountDue,
+  reconcileCountingPeriodFromLedger,
+  periodWithHandoverCount,
 };

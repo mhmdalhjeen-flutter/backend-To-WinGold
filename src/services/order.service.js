@@ -16,7 +16,6 @@ const {
   isTerminalStatus,
   normalizeStatus,
 } = require("../utils/orderStatus.util");
-const deliveryCompanyHandoverService = require("./deliveryCompanyHandover.service");
 const DeliverySession = require("../models/deliverySession");
 const DeliveryCompanyDriver = require("../models/deliveryCompanyDriver");
 const { normalizeLocalPhone } = require("../utils/phone.util");
@@ -679,16 +678,10 @@ async function updateOrderStatusCore(ownerId, orderId, status, session, options 
       throw err;
     }
 
-    await deliveryCompanyHandoverService.recordStoreHandoverToDeliveryCompany(order._id, {
+    await ensureStoreHandoverBillingRecorded(order._id, {
       previousStatus: "ready_for_driver_pickup",
       storeId: store._id,
       confirmedBy: ownerId,
-    }).catch((err) => {
-      const { safeLog } = require("../utils/logSanitize.util");
-      safeLog("warn", "delivery_company_handover_count_failed", {
-        orderId: String(order._id),
-        message: err?.message,
-      });
     });
 
     // Session advance + notifications: updateOrderStatus → syncDeliverySessionAfterOrderUpdate
@@ -915,6 +908,47 @@ async function updateOrderStatusCore(ownerId, orderId, status, session, options 
   const err = new Error(`لا يمكن تغيير الحالة من "${previousStatus}" إلى "${status}"`);
   err.status = 400;
   throw err;
+}
+
+/** Record store → delivery-company handover for billing; retry once on transient failure. */
+async function ensureStoreHandoverBillingRecorded(orderId, handoverOptions = {}) {
+  const deliveryCompanyHandoverService = require("./deliveryCompanyHandover.service");
+  const { safeLog } = require("../utils/logSanitize.util");
+  let lastResult = null;
+
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    try {
+      lastResult = await deliveryCompanyHandoverService.recordStoreHandoverToDeliveryCompany(
+        orderId,
+        handoverOptions,
+      );
+      if (
+        lastResult?.recorded
+        || lastResult?.billingApplied
+        || lastResult?.billingRecovered
+        || lastResult?.reason === "already_recorded"
+      ) {
+        return lastResult;
+      }
+      if (["invalid_previous_status", "not_handover_status", "no_delivery_company"].includes(lastResult?.reason)) {
+        return lastResult;
+      }
+    } catch (err) {
+      safeLog("warn", "delivery_company_handover_count_failed", {
+        orderId: String(orderId),
+        attempt,
+        message: err?.message,
+      });
+    }
+  }
+
+  if (lastResult && !lastResult.billingApplied && !lastResult.billingRecovered) {
+    safeLog("warn", "delivery_company_handover_billing_unresolved", {
+      orderId: String(orderId),
+      reason: lastResult?.reason || "unknown",
+    });
+  }
+  return lastResult;
 }
 
 /** Sync delivery session after order status commit — routes handoff vs generic sync. */
@@ -1149,16 +1183,10 @@ async function handOrderToDriver(ownerId, orderId) {
     throw err;
   }
 
-  await deliveryCompanyHandoverService.recordStoreHandoverToDeliveryCompany(order._id, {
+  await ensureStoreHandoverBillingRecorded(order._id, {
     previousStatus: "ready_for_driver_pickup",
     storeId: store._id,
     confirmedBy: ownerId,
-  }).catch((err) => {
-    const { safeLog } = require("../utils/logSanitize.util");
-    safeLog("warn", "delivery_company_handover_count_failed", {
-      orderId: String(order._id),
-      message: err?.message,
-    });
   });
 
   await syncDeliverySessionAfterOrderUpdate(order);
