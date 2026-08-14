@@ -52,6 +52,11 @@ const deliveryCompanyOrderHandoverSchema = new mongoose.Schema(
       type: Boolean,
       default: false,
     },
+    /** false = billing increment pending; true = applied or intentionally skipped; null = legacy row */
+    billingCountApplied: {
+      type: Boolean,
+      default: null,
+    },
   },
   { timestamps: true },
 );

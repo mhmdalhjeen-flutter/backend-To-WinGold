@@ -146,6 +146,27 @@ function resetHandoverMocks() {
     }),
   });
 
+  DeliveryCompanyOrderHandover.findOneAndUpdate = async (query, update) => {
+    const key = String(query.order);
+    const row = handoverRecords.get(key);
+    if (!row) return null;
+    if (query.billingCountApplied === false && row.billingCountApplied !== false) return null;
+    if (update?.$set?.billingCountApplied != null) {
+      row.billingCountApplied = update.$set.billingCountApplied;
+    }
+    return row;
+  };
+
+  DeliveryCompanyOrderHandover.updateOne = async (query, update) => {
+    const key = String(query.order);
+    const row = handoverRecords.get(key);
+    if (!row) return { acknowledged: true };
+    if (update?.$set?.billingCountApplied != null) {
+      row.billingCountApplied = update.$set.billingCountApplied;
+    }
+    return { acknowledged: true };
+  };
+
   DeliveryCompanyOrderHandover.create = async (doc) => {
     const key = String(doc.order);
     if (handoverRecords.has(key)) {
@@ -153,7 +174,11 @@ function resetHandoverMocks() {
       err.code = 11000;
       throw err;
     }
-    handoverRecords.set(key, { ...doc, _id: new mongoose.Types.ObjectId() });
+    handoverRecords.set(key, {
+      ...doc,
+      _id: new mongoose.Types.ObjectId(),
+      billingCountApplied: doc.billingCountApplied ?? false,
+    });
     return doc;
   };
 }
@@ -286,6 +311,77 @@ test("concurrent duplicate handover create (E11000) does not increment billing t
   assert.ok(period);
   assert.equal(period.deliveredOrderCount, 1);
   assert.equal(billingIncrementCalls, 1);
+});
+
+test("retry after failed billing increment recovers company count without double-counting", async () => {
+  resetBillingMocks();
+  resetHandoverMocks();
+
+  let failIncrements = true;
+  const originalUpdateOne = DeliveryCompanyBillingPeriod.updateOne;
+  DeliveryCompanyBillingPeriod.updateOne = async (query, update) => {
+    if (update.$inc?.deliveredOrderCount && failIncrements) {
+      return { modifiedCount: 0 };
+    }
+    return originalUpdateOne(query, update);
+  };
+
+  await assert.rejects(
+    () => recordStoreHandoverToDeliveryCompany(orderId, { previousStatus: REQUIRED_PREVIOUS_STATUS }),
+    (err) => /فشل زيادة عداد/.test(err.message),
+  );
+
+  const periodAfterFailure = periods.get(periodKey(companyId, "2026-08"));
+  assert.equal(periodAfterFailure?.deliveredOrderCount || 0, 0);
+  assert.equal(handoverRecords.get(String(orderId))?.billingCountApplied, false);
+
+  failIncrements = false;
+
+  const retry = await recordStoreHandoverToDeliveryCompany(orderId, {
+    previousStatus: REQUIRED_PREVIOUS_STATUS,
+  });
+  assert.equal(retry.recorded, false);
+  assert.equal(retry.reason, "already_recorded");
+  assert.equal(retry.billingRecovered, true);
+
+  const period = periods.get(periodKey(companyId, "2026-08"));
+  assert.equal(period.deliveredOrderCount, 1);
+  assert.equal(billingIncrementCalls, 1);
+  assert.equal(handoverRecords.get(String(orderId))?.billingCountApplied, true);
+
+  DeliveryCompanyBillingPeriod.updateOne = originalUpdateOne;
+});
+
+test("handover to company A does not increment company B billing period", async () => {
+  resetBillingMocks();
+  resetHandoverMocks();
+
+  const companyB = new mongoose.Types.ObjectId();
+  const orderB = new mongoose.Types.ObjectId();
+  const sessionB = new mongoose.Types.ObjectId();
+
+  Order.findById = () => ({
+    select: () => ({
+      lean: async () => ({
+        _id: orderB,
+        status: HANDOVER_STATUS,
+        deliveryGroup: sessionB,
+        statusTimeline: [{ status: HANDOVER_STATUS, at: new Date("2026-08-16T10:00:00Z") }],
+      }),
+    }),
+  });
+
+  DeliverySession.findById = () => ({
+    select: () => ({
+      lean: async () => ({ deliveryCompany: companyB }),
+    }),
+  });
+
+  await recordStoreHandoverToDeliveryCompany(orderB, { previousStatus: REQUIRED_PREVIOUS_STATUS });
+
+  assert.ok(periods.get(periodKey(companyB, "2026-08")));
+  assert.equal(periods.get(periodKey(companyB, "2026-08")).deliveredOrderCount, 1);
+  assert.equal(periods.get(periodKey(companyId, "2026-08"))?.deliveredOrderCount || 0, 0);
 });
 
 test("concurrent store subscription period creation resolves to one document", async () => {

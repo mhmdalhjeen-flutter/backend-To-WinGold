@@ -44,6 +44,7 @@ const handoverCounts = new Map();
 const handoverRecords = new Map();
 
 const originalHandoverFindOne = DeliveryCompanyOrderHandover.findOne;
+const originalHandoverFindOneAndUpdate = DeliveryCompanyOrderHandover.findOneAndUpdate;
 const originalHandoverCreate = DeliveryCompanyOrderHandover.create;
 const originalOrderFindById = Order.findById;
 const originalOrderUpdateOne = Order.updateOne;
@@ -77,6 +78,27 @@ DeliveryCompanyOrderHandover.findOne = (query) => ({
   }),
 });
 
+DeliveryCompanyOrderHandover.findOneAndUpdate = async (query, update) => {
+  const key = String(query.order);
+  const row = handoverRecords.get(key);
+  if (!row) return null;
+  if (query.billingCountApplied === false && row.billingCountApplied !== false) return null;
+  if (update?.$set?.billingCountApplied != null) {
+    row.billingCountApplied = update.$set.billingCountApplied;
+  }
+  return row;
+};
+
+DeliveryCompanyOrderHandover.updateOne = async (query, update) => {
+  const key = String(query.order);
+  const row = handoverRecords.get(key);
+  if (!row) return { acknowledged: true };
+  if (update?.$set?.billingCountApplied != null) {
+    row.billingCountApplied = update.$set.billingCountApplied;
+  }
+  return { acknowledged: true };
+};
+
 DeliveryCompanyOrderHandover.create = async (doc) => {
   const key = String(doc.order);
   if (handoverRecords.has(key)) {
@@ -84,7 +106,11 @@ DeliveryCompanyOrderHandover.create = async (doc) => {
     err.code = 11000;
     throw err;
   }
-  handoverRecords.set(key, { ...doc, _id: new mongoose.Types.ObjectId() });
+  handoverRecords.set(key, {
+    ...doc,
+    _id: new mongoose.Types.ObjectId(),
+    billingCountApplied: doc.billingCountApplied ?? false,
+  });
   return doc;
 };
 
@@ -181,7 +207,7 @@ test("concurrent duplicate handover insert (E11000) is treated as already record
   const duplicates = results.filter((r) => !r.recorded);
   assert.equal(recorded.length, 1);
   assert.equal(duplicates.length, 1);
-  assert.equal(duplicates[0].reason, "duplicate");
+  assert.ok(["duplicate", "already_recorded"].includes(duplicates[0].reason));
   assert.equal(handoverCounts.get(String(companyA)), 1);
 });
 
@@ -248,6 +274,7 @@ test("does not count when order has no delivery session", async () => {
 
 test.after(() => {
   DeliveryCompanyOrderHandover.findOne = originalHandoverFindOne;
+  DeliveryCompanyOrderHandover.findOneAndUpdate = originalHandoverFindOneAndUpdate;
   DeliveryCompanyOrderHandover.create = originalHandoverCreate;
   Order.findById = originalOrderFindById;
   Order.updateOne = originalOrderUpdateOne;

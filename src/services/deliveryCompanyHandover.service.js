@@ -49,6 +49,59 @@ async function resolveDeliveryCompanyForOrder(orderId) {
   };
 }
 
+const BILLING_SKIP_REASONS = new Set(["period_closed", "billing_frozen"]);
+
+async function releaseBillingIncrementClaim(orderId) {
+  await DeliveryCompanyOrderHandover.updateOne(
+    { order: orderId, billingCountApplied: true },
+    { $set: { billingCountApplied: false } },
+  );
+}
+
+/**
+ * Atomically claim and apply one billing-period increment for a handover row.
+ * Safe under duplicate handover requests and retriable after transient billing failures.
+ */
+async function applyBillingIncrementForHandover(orderId, companyId, handoverAt) {
+  const claimed = await DeliveryCompanyOrderHandover.findOneAndUpdate(
+    { order: orderId, billingCountApplied: false },
+    { $set: { billingCountApplied: true } },
+  );
+  if (!claimed) {
+    return { applied: false, reason: "billing_already_applied_or_legacy" };
+  }
+
+  const deliveryCompanyBillingService = require("./deliveryCompanyBilling.service");
+  try {
+    const billingResult = await deliveryCompanyBillingService.incrementHandoverCount(companyId, handoverAt);
+    if (!billingResult?.incremented && !BILLING_SKIP_REASONS.has(billingResult?.reason)) {
+      await releaseBillingIncrementClaim(orderId);
+      const err = new Error("فشل زيادة عداد فوترة شركة التوصيل");
+      err.status = 500;
+      err.billingReason = billingResult?.reason || "unknown";
+      throw err;
+    }
+    if (!billingResult?.incremented) {
+      safeLog("info", "delivery_billing_increment_not_applied", {
+        companyId: String(companyId),
+        orderId: String(orderId),
+        reason: billingResult?.reason,
+        monthKey: billingResult?.monthKey,
+      });
+    }
+    return { applied: Boolean(billingResult?.incremented), billingResult };
+  } catch (billingErr) {
+    await releaseBillingIncrementClaim(orderId);
+    safeLog("error", "delivery_billing_increment_failed", {
+      message: billingErr.message,
+      companyId: String(companyId),
+      orderId: String(orderId),
+      status: billingErr.status || 500,
+    });
+    throw billingErr;
+  }
+}
+
 /**
  * Records a store handover to the delivery company (accounting event).
  * Idempotent — safe to call on retries; only the first successful insert increments the count.
@@ -70,10 +123,10 @@ async function recordStoreHandoverToDeliveryCompany(orderId, {
     return { recorded: false, reason: "not_handover_status" };
   }
 
-  const existing = await DeliveryCompanyOrderHandover.findOne({ order: orderId })
-    .select("_id deliveryCompany")
+  let existing = await DeliveryCompanyOrderHandover.findOne({ order: orderId })
+    .select("_id deliveryCompany billingCountApplied handoverAt")
     .lean();
-  if (existing) {
+  if (existing?.billingCountApplied === true) {
     return {
       recorded: false,
       reason: "already_recorded",
@@ -82,71 +135,75 @@ async function recordStoreHandoverToDeliveryCompany(orderId, {
   }
 
   const fullOrder = await Order.findById(orderId).select("statusTimeline deliveryGroup").lean();
-  const handoverAt = findHandoverTimestamp(fullOrder?.statusTimeline) || new Date();
+  let handoverAt = existing?.handoverAt || findHandoverTimestamp(fullOrder?.statusTimeline) || new Date();
+  let activeCompanyId = existing?.deliveryCompany || companyId;
+  let newlyCreated = false;
 
-  let assignedDriverId = null;
-  if (fullOrder?.deliveryGroup) {
-    const session = await DeliverySession.findById(fullOrder.deliveryGroup)
-      .select("assignedDriver.driverId")
-      .lean();
-    assignedDriverId = session?.assignedDriver?.driverId || null;
-  }
-
-  try {
-    await DeliveryCompanyOrderHandover.create({
-      order: orderId,
-      deliveryCompany: companyId,
-      store: storeId || undefined,
-      confirmedBy: confirmedBy || undefined,
-      handoverAt,
-      assignedDriverId: assignedDriverId || undefined,
-    });
-  } catch (err) {
-    if (err?.code === 11000) {
-      return { recorded: false, reason: "duplicate", companyId };
+  if (!existing) {
+    let assignedDriverId = null;
+    if (fullOrder?.deliveryGroup) {
+      const session = await DeliverySession.findById(fullOrder.deliveryGroup)
+        .select("assignedDriver.driverId")
+        .lean();
+      assignedDriverId = session?.assignedDriver?.driverId || null;
     }
-    throw err;
-  }
 
-  await DeliveryCompany.updateOne(
-    { _id: companyId },
-    { $inc: { handedOverOrderCount: 1 } },
-  );
-
-  await Order.updateOne(
-    { _id: orderId },
-    {
-      $set: {
-        deliveryCompanyHandoverAt: handoverAt,
-        deliveryCompanyHandoverCompany: companyId,
-      },
-    },
-  );
-
-  try {
-    const deliveryCompanyBillingService = require("./deliveryCompanyBilling.service");
-    const billingResult = await deliveryCompanyBillingService.incrementHandoverCount(companyId, handoverAt);
-    if (!billingResult?.incremented) {
-      const reason = billingResult?.reason || "unknown";
-      const logLevel = reason === "period_closed" || reason === "billing_frozen" ? "info" : "warn";
-      safeLog(logLevel, "delivery_billing_increment_not_applied", {
-        companyId: String(companyId),
-        orderId: String(orderId),
-        reason,
-        monthKey: billingResult?.monthKey,
+    try {
+      await DeliveryCompanyOrderHandover.create({
+        order: orderId,
+        deliveryCompany: companyId,
+        store: storeId || undefined,
+        confirmedBy: confirmedBy || undefined,
+        handoverAt,
+        assignedDriverId: assignedDriverId || undefined,
+        billingCountApplied: false,
       });
+      newlyCreated = true;
+    } catch (err) {
+      if (err?.code !== 11000) throw err;
+
+      existing = await DeliveryCompanyOrderHandover.findOne({ order: orderId })
+        .select("_id deliveryCompany billingCountApplied handoverAt")
+        .lean();
+      if (!existing) throw err;
+      if (existing.billingCountApplied === true) {
+        return { recorded: false, reason: "duplicate", companyId: existing.deliveryCompany };
+      }
+      handoverAt = existing.handoverAt || handoverAt;
+      activeCompanyId = existing.deliveryCompany;
     }
-  } catch (billingErr) {
-    safeLog("error", "delivery_billing_increment_failed", {
-      message: billingErr.message,
-      companyId: String(companyId),
-      orderId: String(orderId),
-      status: billingErr.status || 500,
-    });
-    throw billingErr;
   }
 
-  return { recorded: true, companyId, handoverAt };
+  if (newlyCreated) {
+    await DeliveryCompany.updateOne(
+      { _id: activeCompanyId },
+      { $inc: { handedOverOrderCount: 1 } },
+    );
+
+    await Order.updateOne(
+      { _id: orderId },
+      {
+        $set: {
+          deliveryCompanyHandoverAt: handoverAt,
+          deliveryCompanyHandoverCompany: activeCompanyId,
+        },
+      },
+    );
+  }
+
+  const billing = await applyBillingIncrementForHandover(orderId, activeCompanyId, handoverAt);
+
+  if (newlyCreated) {
+    return { recorded: true, companyId: activeCompanyId, handoverAt, billingApplied: billing.applied };
+  }
+
+  return {
+    recorded: false,
+    reason: existing ? "already_recorded" : "duplicate",
+    companyId: activeCompanyId,
+    handoverAt,
+    billingRecovered: billing.applied,
+  };
 }
 
 async function countHandoversForCompany(companyId) {
