@@ -34,9 +34,9 @@ const { resolveMonthlyVisits, incrementStoreVisits } = require("../utils/storeVi
 const { applyProductDisplayPrioritySort } = require("../utils/displayPriority.util");
 
 const OFFER_LIST_SELECT =
-  "title description offerType value originalPrice finalPrice freeDelivery currency priceUnit image priority featuredPriority displayPriority views clicks ratingAvg ratingCount isFeatured isExtended store createdAt expiresAt isActive storeItemCategory";
+  "title description offerType value originalPrice finalPrice freeDelivery currency priceUnit purchaseMode image priority featuredPriority displayPriority views clicks ratingAvg ratingCount isFeatured isExtended store createdAt expiresAt isActive storeItemCategory";
 const PRODUCT_LIST_SELECT =
-  "name description price currency priceUnit wholesalePrice isWholesale minOrderQuantity image stock freeDelivery ratingAvg ratingCount displayPriority isActive storeItemCategory store createdAt";
+  "name description price currency priceUnit purchaseMode wholesalePrice isWholesale minOrderQuantity image stock freeDelivery ratingAvg ratingCount displayPriority isActive storeItemCategory store createdAt";
 
 function stripBase64Images(offer) {
   if (!offer || typeof offer !== "object") return offer;

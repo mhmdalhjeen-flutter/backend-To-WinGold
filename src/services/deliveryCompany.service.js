@@ -85,16 +85,19 @@ function buildEnabledPaymentMethods(paymentSettings) {
   return enabled;
 }
 
-function toAdminCompany(company, accounts = []) {
+function toAdminCompany(company, accounts = [], overrides = {}) {
   const plain = company.toObject ? company.toObject() : { ...company };
   const servedRegionIds = (plain.servedRegionIds || []).map(String);
   const paymentMethods = resolvePaymentToggles(plain.paymentMethods, DEFAULT_DELIVERY_PAYMENT_TOGGLES);
+  const handedOverOrderCount = overrides.handedOverOrderCount != null
+    ? Math.max(0, Number(overrides.handedOverOrderCount) || 0)
+    : Math.max(0, Number(plain.handedOverOrderCount) || 0);
   return {
     ...plain,
     paymentMethods,
     servedRegionIds,
     coverageCount: plain.servesAllRegions ? 0 : servedRegionIds.length,
-    handedOverOrderCount: Math.max(0, Number(plain.handedOverOrderCount) || 0),
+    handedOverOrderCount,
     paymentAccounts: accounts.map((a) => ({
       _id: a._id,
       type: a.type,

@@ -19,13 +19,13 @@ const { buildUserSignals, sortOffersPersonalized, sortOffersByRank } = require("
 const { getDescendantIds } = require("../utils/region.util");
 
 const LIST_OFFER_SELECT =
-  "title description offerType originalPrice value finalPrice currency priceUnit isActive priority featuredPriority displayPriority views shareCount createdAt expiresAt image bogoGetQuantity bogoBuyQuantity freeItemName customLabel store";
+  "title description offerType originalPrice value finalPrice currency priceUnit purchaseMode isActive priority featuredPriority displayPriority views shareCount createdAt expiresAt image bogoGetQuantity bogoBuyQuantity freeItemName customLabel store";
 
 const STORE_POPULATE_SELECT =
   "name logo region subRegion category categoryId ratingAvg ratingCount regionId subRegionId isVerifiedStore owner";
 
 const PRODUCT_LIST_SELECT =
-  "name description price currency priceUnit image stock freeDelivery ratingAvg ratingCount displayPriority store createdAt";
+  "name description price currency priceUnit purchaseMode image stock freeDelivery ratingAvg ratingCount displayPriority store createdAt";
 
 const { resolveListImageField, resolveStoreMediaFields } = require("../utils/mediaDelivery.util");
 const { applyProductDisplayPrioritySort } = require("../utils/displayPriority.util");

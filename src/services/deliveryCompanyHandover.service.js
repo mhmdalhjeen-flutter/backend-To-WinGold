@@ -213,6 +213,31 @@ async function countHandoversForCompany(companyId) {
   });
 }
 
+async function countHandoversByCompaniesForMonth(companyIds, monthKey) {
+  if (!Array.isArray(companyIds) || !companyIds.length) return new Map();
+  const { getMonthBounds } = require("../utils/billingMonth.util");
+  const { start, end } = getMonthBounds(monthKey);
+  const rows = await DeliveryCompanyOrderHandover.aggregate([
+    {
+      $match: {
+        deliveryCompany: { $in: companyIds },
+        handoverAt: { $gte: start, $lt: end },
+      },
+    },
+    { $group: { _id: "$deliveryCompany", count: { $sum: 1 } } },
+  ]);
+  return new Map(rows.map((row) => [String(row._id), row.count]));
+}
+
+async function countHandoversByCompaniesLifetime(companyIds) {
+  if (!Array.isArray(companyIds) || !companyIds.length) return new Map();
+  const rows = await DeliveryCompanyOrderHandover.aggregate([
+    { $match: { deliveryCompany: { $in: companyIds } } },
+    { $group: { _id: "$deliveryCompany", count: { $sum: 1 } } },
+  ]);
+  return new Map(rows.map((row) => [String(row._id), row.count]));
+}
+
 async function rebuildCompanyHandoverCount(companyId) {
   const count = await countHandoversForCompany(companyId);
   await DeliveryCompany.updateOne(
@@ -410,6 +435,8 @@ module.exports = {
   REQUIRED_PREVIOUS_STATUS,
   recordStoreHandoverToDeliveryCompany,
   countHandoversForCompany,
+  countHandoversByCompaniesForMonth,
+  countHandoversByCompaniesLifetime,
   rebuildCompanyHandoverCount,
   findHandoverTimestamp,
   markDriverConfirmedForOrders,

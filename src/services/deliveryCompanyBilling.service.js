@@ -488,6 +488,24 @@ async function listBillingHistory(companyId, { limit = 24 } = {}) {
   return periods.map(serializePeriod);
 }
 
+function periodWithHandoverCount(period, monthKey, handoverCount) {
+  if (!handoverCount && !period) return null;
+  const base = period ? serializePeriod(period) : {
+    monthKey,
+    status: BILLING_STATUSES.COUNTING,
+    deliveredOrderCount: 0,
+    amountDue: 0,
+  };
+  return {
+    ...base,
+    deliveredOrderCount: handoverCount,
+    amountDue: computeAmountDue(
+      handoverCount,
+      base.pricePerOrder ?? DEFAULT_PRICE_PER_ORDER,
+    ),
+  };
+}
+
 async function listAdminBillingCards(date = new Date()) {
   const currentMonthKey = getCurrentMonthKey(date);
   const previousMonthKey = getPreviousMonthKey(date);
@@ -499,10 +517,11 @@ async function listAdminBillingCards(date = new Date()) {
 
   const companyIds = companies.map((c) => c._id);
   const handoverService = require("./deliveryCompanyHandover.service");
-  const unconfirmedByCompany = await handoverService.countUnconfirmedHandoversByCompanies(
-    companyIds,
-    currentMonthKey,
-  );
+  const [unconfirmedByCompany, currentHandoverCounts, previousHandoverCounts] = await Promise.all([
+    handoverService.countUnconfirmedHandoversByCompanies(companyIds, currentMonthKey),
+    handoverService.countHandoversByCompaniesForMonth(companyIds, currentMonthKey),
+    handoverService.countHandoversByCompaniesForMonth(companyIds, previousMonthKey),
+  ]);
 
   const allPeriods = await DeliveryCompanyBillingPeriod.find({
     deliveryCompany: { $in: companyIds },
@@ -544,8 +563,20 @@ async function listAdminBillingCards(date = new Date()) {
       const billCount = billPeriod?.deliveredOrderCount ?? 0;
       const billPrice = billPeriod?.pricePerOrder ?? Number(company.pricePerDeliveredOrder ?? DEFAULT_PRICE_PER_ORDER);
       const billTotal = billPeriod?.amountDue ?? computeAmountDue(billCount, billPrice);
-      const currentMonthOrderCount = currentPeriod?.deliveredOrderCount ?? 0;
+      const currentMonthHandoverCount = currentHandoverCounts.get(String(company._id)) || 0;
+      const previousMonthHandoverCount = previousHandoverCounts.get(String(company._id)) || 0;
+      const currentMonthOrderCount = currentMonthHandoverCount;
       const unconfirmedHandoverCount = unconfirmedByCompany.get(String(company._id)) || 0;
+      const currentPeriodForDisplay = periodWithHandoverCount(
+        currentPeriod,
+        currentMonthKey,
+        currentMonthHandoverCount,
+      );
+      const previousPeriodForDisplay = periodWithHandoverCount(
+        previousPeriod,
+        previousMonthKey,
+        previousMonthHandoverCount,
+      );
 
       return {
         company,
@@ -553,8 +584,8 @@ async function listAdminBillingCards(date = new Date()) {
         currentMonthOrderCount,
         unconfirmedHandoverCount,
         hasUnconfirmedHandovers: unconfirmedHandoverCount > 0,
-        currentPeriod: serializePeriod(currentPeriod),
-        previousPeriod: serializePeriod(previousPeriod),
+        currentPeriod: currentPeriodForDisplay,
+        previousPeriod: previousPeriodForDisplay,
         openPeriod: serializePeriod(openPeriod),
         reviewPeriod: serializePeriod(reviewPeriod),
         billPeriod: serializePeriod(billPeriod),

@@ -181,16 +181,19 @@ async function listCompaniesWithAccounts() {
   if (!companies.length) return [];
 
   const ids = companies.map((c) => c._id);
-  const accounts = await DeliveryCompanyPaymentAccount.find({ deliveryCompany: { $in: ids } })
-    .sort({ type: 1, isActive: -1, createdAt: -1 })
-    .lean();
-
-  const portalUsers = await User.find({
-    role: "delivery_company",
-    deliveryCompanyId: { $in: ids },
-  })
-    .select("name email phone status deliveryCompanyId")
-    .lean();
+  const handoverService = require("../services/deliveryCompanyHandover.service");
+  const [accounts, portalUsers, lifetimeHandoverCounts] = await Promise.all([
+    DeliveryCompanyPaymentAccount.find({ deliveryCompany: { $in: ids } })
+      .sort({ type: 1, isActive: -1, createdAt: -1 })
+      .lean(),
+    User.find({
+      role: "delivery_company",
+      deliveryCompanyId: { $in: ids },
+    })
+      .select("name email phone status deliveryCompanyId")
+      .lean(),
+    handoverService.countHandoversByCompaniesLifetime(ids),
+  ]);
 
   const byCompany = accounts.reduce((acc, row) => {
     const key = String(row.deliveryCompany);
@@ -205,7 +208,9 @@ async function listCompaniesWithAccounts() {
   }, {});
 
   return companies.map((company) => ({
-    ...toAdminCompany(company, byCompany[String(company._id)] || []),
+    ...toAdminCompany(company, byCompany[String(company._id)] || [], {
+      handedOverOrderCount: lifetimeHandoverCounts.get(String(company._id)) ?? company.handedOverOrderCount ?? 0,
+    }),
     portalAccount: toPortalAccountSummary(portalByCompany[String(company._id)]),
     deliveryProofsPath: `/delivery-proofs?companyId=${String(company._id)}`,
   }));
