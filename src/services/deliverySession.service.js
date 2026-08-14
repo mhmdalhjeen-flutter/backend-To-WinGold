@@ -620,10 +620,23 @@ async function confirmSession(customerId, body = {}) {
   return formatted;
 }
 
+function normalizeHandoverOrderSnapshot(orderOrId) {
+  if (!orderOrId || typeof orderOrId !== "object" || !orderOrId._id) return null;
+  return {
+    _id: orderOrId._id,
+    status: orderOrId.status,
+    deliveryMethod: orderOrId.deliveryMethod,
+    deliveryGroup: orderOrId.deliveryGroup,
+    store: orderOrId.store,
+  };
+}
+
 /** Sync session after store hands order to driver */
-async function syncAfterStoreHandover(orderId) {
-  const oid = requireObjectId(orderId, "orderId");
-  const order = await Order.findById(oid).select("status deliveryMethod deliveryGroup store").lean();
+async function syncAfterStoreHandover(orderOrId) {
+  const committedOrder = normalizeHandoverOrderSnapshot(orderOrId);
+  const oid = requireObjectId(String(committedOrder?._id ?? orderOrId), "orderId");
+  const order = committedOrder
+    ?? await Order.findById(oid).select("status deliveryMethod deliveryGroup store").lean();
   if (!order || !order.deliveryGroup) return;
   // Company-delivery handoff only; ignore pickup / nearby paths.
   if (order.deliveryMethod && order.deliveryMethod !== DELIVERY_METHODS.DELIVERY) return;

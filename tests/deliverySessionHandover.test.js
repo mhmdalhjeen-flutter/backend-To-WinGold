@@ -100,7 +100,7 @@ test("single-order store handover immediately sets session to out_for_delivery",
   sessions.clear();
   makeSession();
 
-  await syncAfterStoreHandover(String(orderId));
+  await syncAfterStoreHandover(mockOrder(orderId, "delivery_handover_complete"));
 
   const session = sessions.get(String(sessionId));
   assert.equal(session.status, SESSION_STATUSES.OUT_FOR_DELIVERY);
@@ -113,10 +113,28 @@ test("store handover advances when orders exist only on storeStops (not doc.orde
     storeStops: [{ order: orderId, collectionStatus: "pending", orderStatus: "ready_for_driver_pickup" }],
   });
 
-  await syncAfterStoreHandover(String(orderId));
+  await syncAfterStoreHandover(mockOrder(orderId, "delivery_handover_complete"));
 
   const session = sessions.get(String(sessionId));
   assert.equal(session.status, SESSION_STATUSES.OUT_FOR_DELIVERY);
+});
+
+test("committed handover order advances session even when DB re-fetch is stale", async () => {
+  sessions.clear();
+  makeSession();
+
+  Order.findById = () => ({
+    select: () => ({
+      lean: async () => mockOrder(orderId, "ready_for_driver_pickup"),
+    }),
+  });
+
+  await syncAfterStoreHandover(mockOrder(orderId, "delivery_handover_complete"));
+
+  const session = sessions.get(String(sessionId));
+  assert.equal(session.status, SESSION_STATUSES.OUT_FOR_DELIVERY);
+  assert.equal(session.storeStops[0].orderStatus, "delivery_handover_complete");
+  assert.equal(session.storeStops[0].collectionStatus, "collected");
 });
 
 test("multi-order session stays assigned until every order is handed over", async () => {
@@ -145,7 +163,7 @@ test("multi-order session stays assigned until every order is handed over", asyn
     }),
   });
 
-  await syncAfterStoreHandover(String(orderId));
+  await syncAfterStoreHandover(mockOrder(orderId, "delivery_handover_complete", multiSessionId));
 
   const session = sessions.get(String(multiSessionId));
   assert.equal(session.status, SESSION_STATUSES.DRIVER_ASSIGNED);

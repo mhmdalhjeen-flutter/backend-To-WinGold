@@ -927,7 +927,7 @@ async function syncDeliverySessionAfterOrderUpdate(order) {
 
   try {
     if (isHandover) {
-      await deliverySessionService.syncAfterStoreHandover(order._id);
+      await deliverySessionService.syncAfterStoreHandover(order);
     } else {
       await deliverySessionService.syncOrderInSessions(order._id);
     }
