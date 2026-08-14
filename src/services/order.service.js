@@ -682,6 +682,7 @@ async function updateOrderStatusCore(ownerId, orderId, status, session, options 
       previousStatus: "ready_for_driver_pickup",
       storeId: store._id,
       confirmedBy: ownerId,
+      committedOrder: order,
     });
 
     // Session advance + notifications: updateOrderStatus → syncDeliverySessionAfterOrderUpdate
@@ -914,13 +915,14 @@ async function updateOrderStatusCore(ownerId, orderId, status, session, options 
 async function ensureStoreHandoverBillingRecorded(orderId, handoverOptions = {}) {
   const deliveryCompanyHandoverService = require("./deliveryCompanyHandover.service");
   const { safeLog } = require("../utils/logSanitize.util");
+  const { committedOrder, ...handoverArgs } = handoverOptions;
   let lastResult = null;
 
   for (let attempt = 1; attempt <= 2; attempt += 1) {
     try {
       lastResult = await deliveryCompanyHandoverService.recordStoreHandoverToDeliveryCompany(
         orderId,
-        handoverOptions,
+        { ...handoverArgs, committedOrder },
       );
       if (
         lastResult?.recorded
@@ -930,7 +932,7 @@ async function ensureStoreHandoverBillingRecorded(orderId, handoverOptions = {})
       ) {
         return lastResult;
       }
-      if (["invalid_previous_status", "not_handover_status", "no_delivery_company"].includes(lastResult?.reason)) {
+      if (lastResult?.reason === "invalid_previous_status") {
         return lastResult;
       }
     } catch (err) {
@@ -942,10 +944,11 @@ async function ensureStoreHandoverBillingRecorded(orderId, handoverOptions = {})
     }
   }
 
-  if (lastResult && !lastResult.billingApplied && !lastResult.billingRecovered) {
+  if (lastResult && !lastResult.recorded && !lastResult.billingApplied && !lastResult.billingRecovered) {
     safeLog("warn", "delivery_company_handover_billing_unresolved", {
       orderId: String(orderId),
       reason: lastResult?.reason || "unknown",
+      hasCommittedOrder: Boolean(committedOrder),
     });
   }
   return lastResult;
@@ -1187,6 +1190,7 @@ async function handOrderToDriver(ownerId, orderId) {
     previousStatus: "ready_for_driver_pickup",
     storeId: store._id,
     confirmedBy: ownerId,
+    committedOrder: order,
   });
 
   await syncDeliverySessionAfterOrderUpdate(order);

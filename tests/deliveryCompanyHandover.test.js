@@ -54,11 +54,26 @@ const originalOrderUpdateOne = Order.updateOne;
 const originalSessionFindById = DeliverySession.findById;
 const originalCompanyUpdateOne = DeliveryCompany.updateOne;
 
+function defaultOrderFindById(id) {
+  const orders = {
+    [String(order1)]: mockOrder(order1, { deliveryGroup: sessionA1 }),
+    [String(order2)]: mockOrder(order2, { deliveryGroup: sessionA1 }),
+    [String(order3)]: mockOrder(order3, { deliveryGroup: sessionB1 }),
+  };
+  const base = orders[String(id)] || null;
+  return {
+    select: () => ({
+      lean: async () => base,
+    }),
+  };
+}
+
 function resetState() {
   handoverCounts.set(String(companyA), 0);
   handoverCounts.set(String(companyB), 0);
   handoverRecords.clear();
   billingIncrementBehavior = { incremented: true };
+  Order.findById = defaultOrderFindById;
 }
 
 function mockOrder(orderId, {
@@ -120,26 +135,20 @@ DeliveryCompanyOrderHandover.create = async (doc) => {
   return doc;
 };
 
-Order.findById = (id) => {
-  const orders = {
-    [String(order1)]: mockOrder(order1, { deliveryGroup: sessionA1 }),
-    [String(order2)]: mockOrder(order2, { deliveryGroup: sessionA1 }),
-    [String(order3)]: mockOrder(order3, { deliveryGroup: sessionB1 }),
-  };
-  const base = orders[String(id)] || null;
-  return {
-    select: () => ({
-      lean: async () => base,
-    }),
-  };
-};
+Order.findById = defaultOrderFindById;
 
 Order.updateOne = async () => ({ acknowledged: true });
 
 DeliverySession.findById = (id) => {
   const sessions = {
-    [String(sessionA1)]: { deliveryCompany: companyA },
-    [String(sessionB1)]: { deliveryCompany: companyB },
+    [String(sessionA1)]: {
+      deliveryCompany: companyA,
+      assignedDriver: { driverId: new mongoose.Types.ObjectId() },
+    },
+    [String(sessionB1)]: {
+      deliveryCompany: companyB,
+      assignedDriver: { driverId: new mongoose.Types.ObjectId() },
+    },
   };
   const session = sessions[String(id)] || null;
   return {
@@ -276,6 +285,94 @@ test("does not count when order has no delivery session", async () => {
       }),
     };
   };
+});
+
+test("stale DB order status without committedOrder skips ledger creation", async () => {
+  resetState();
+  Order.findById = () => ({
+    select: () => ({
+      lean: async () => mockOrder(order1, {
+        status: "ready_for_driver_pickup",
+        deliveryGroup: sessionA1,
+      }),
+    }),
+  });
+
+  const result = await recordStoreHandoverToDeliveryCompany(order1, {
+    previousStatus: REQUIRED_PREVIOUS_STATUS,
+  });
+
+  assert.equal(result.recorded, false);
+  assert.equal(result.reason, "not_handover_status");
+  assert.equal(handoverRecords.size, 0);
+  assert.equal(handoverCounts.get(String(companyA)), 0);
+});
+
+test("committed handover order creates ledger when DB re-fetch is stale", async () => {
+  resetState();
+  const handoverAt = new Date("2026-08-14T15:46:36.239Z");
+  const committedOrder = {
+    _id: order1,
+    status: HANDOVER_STATUS,
+    deliveryGroup: sessionA1,
+    deliveryCompanyHandoverCompany: null,
+    statusTimeline: [
+      { status: "ready_for_driver_pickup", at: new Date("2026-08-14T15:46:31.187Z") },
+      { status: HANDOVER_STATUS, at: handoverAt },
+    ],
+  };
+
+  Order.findById = () => ({
+    select: () => ({
+      lean: async () => mockOrder(order1, {
+        status: "ready_for_driver_pickup",
+        deliveryGroup: sessionA1,
+      }),
+    }),
+  });
+
+  const result = await recordStoreHandoverToDeliveryCompany(order1, {
+    previousStatus: REQUIRED_PREVIOUS_STATUS,
+    committedOrder,
+  });
+
+  assert.equal(result.recorded, true);
+  assert.equal(String(result.companyId), String(companyA));
+  assert.equal(handoverRecords.size, 1);
+  assert.equal(handoverCounts.get(String(companyA)), 1);
+  assert.equal(handoverRecords.get(String(order1))?.billingCountApplied, true);
+});
+
+test("production scenario: duplicate handover with committed order does not double-count", async () => {
+  resetState();
+  const committedOrder = {
+    _id: order1,
+    status: HANDOVER_STATUS,
+    deliveryGroup: sessionA1,
+    deliveryCompanyHandoverCompany: null,
+    statusTimeline: [{ status: HANDOVER_STATUS, at: new Date("2026-08-14T15:46:36.239Z") }],
+  };
+
+  Order.findById = () => ({
+    select: () => ({
+      lean: async () => committedOrder,
+    }),
+  });
+
+  const first = await recordStoreHandoverToDeliveryCompany(order1, {
+    previousStatus: REQUIRED_PREVIOUS_STATUS,
+    committedOrder,
+  });
+  const second = await recordStoreHandoverToDeliveryCompany(order1, {
+    previousStatus: REQUIRED_PREVIOUS_STATUS,
+    committedOrder,
+  });
+
+  assert.equal(first.recorded, true);
+  assert.equal(second.recorded, false);
+  assert.equal(second.reason, "already_recorded");
+  assert.equal(handoverRecords.size, 1);
+  assert.equal(handoverCounts.get(String(companyA)), 1);
 });
 
 test("billing increment failure leaves ledger recoverable for retry", async () => {

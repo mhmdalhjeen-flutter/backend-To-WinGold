@@ -32,21 +32,30 @@ function findHandoverTimestamp(statusTimeline = []) {
   return null;
 }
 
-async function resolveDeliveryCompanyForOrder(orderId) {
-  const order = await Order.findById(orderId)
-    .select("deliveryGroup status deliveryCompanyHandoverCompany")
-    .lean();
+async function resolveDeliveryCompanyForOrder(orderId, committedOrder = null) {
+  const hasSnapshot = Boolean(committedOrder?.deliveryGroup);
+  const order = hasSnapshot
+    ? committedOrder
+    : await Order.findById(orderId)
+      .select("deliveryGroup status deliveryCompanyHandoverCompany statusTimeline")
+      .lean();
   if (!order?.deliveryGroup) return null;
 
   const session = await DeliverySession.findById(order.deliveryGroup)
-    .select("deliveryCompany")
+    .select("deliveryCompany assignedDriver.driverId")
     .lean();
   if (!session?.deliveryCompany) return null;
 
   return {
     order,
     companyId: session.deliveryCompany,
+    session,
   };
+}
+
+function orderHasHandoverStatus(order, committedOrder = null) {
+  const status = committedOrder?.status ?? order?.status;
+  return status === HANDOVER_STATUS;
 }
 
 const BILLING_SKIP_REASONS = new Set(["period_closed", "billing_frozen"]);
@@ -122,16 +131,29 @@ async function recordStoreHandoverToDeliveryCompany(orderId, {
   previousStatus,
   storeId = null,
   confirmedBy = null,
+  committedOrder = null,
 } = {}) {
   if (previousStatus && previousStatus !== REQUIRED_PREVIOUS_STATUS) {
     return { recorded: false, reason: "invalid_previous_status" };
   }
 
-  const resolved = await resolveDeliveryCompanyForOrder(orderId);
-  if (!resolved) return { recorded: false, reason: "no_delivery_company" };
+  const resolved = await resolveDeliveryCompanyForOrder(orderId, committedOrder);
+  if (!resolved) {
+    safeLog("warn", "delivery_company_handover_no_company", {
+      orderId: String(orderId),
+      hasCommittedOrder: Boolean(committedOrder),
+      deliveryGroup: committedOrder?.deliveryGroup ? String(committedOrder.deliveryGroup) : null,
+    });
+    return { recorded: false, reason: "no_delivery_company" };
+  }
 
-  const { order, companyId } = resolved;
-  if (order.status !== HANDOVER_STATUS) {
+  const { order, companyId, session } = resolved;
+  if (!orderHasHandoverStatus(order, committedOrder)) {
+    safeLog("warn", "delivery_company_handover_not_handover_status", {
+      orderId: String(orderId),
+      dbStatus: order?.status || null,
+      committedStatus: committedOrder?.status || null,
+    });
     return { recorded: false, reason: "not_handover_status" };
   }
 
@@ -146,19 +168,15 @@ async function recordStoreHandoverToDeliveryCompany(orderId, {
     };
   }
 
-  const fullOrder = await Order.findById(orderId).select("statusTimeline deliveryGroup").lean();
+  const fullOrder = committedOrder?.statusTimeline
+    ? committedOrder
+    : await Order.findById(orderId).select("statusTimeline deliveryGroup").lean();
   let handoverAt = existing?.handoverAt || findHandoverTimestamp(fullOrder?.statusTimeline) || new Date();
   let activeCompanyId = existing?.deliveryCompany || companyId;
   let newlyCreated = false;
 
   if (!existing) {
-    let assignedDriverId = null;
-    if (fullOrder?.deliveryGroup) {
-      const session = await DeliverySession.findById(fullOrder.deliveryGroup)
-        .select("assignedDriver.driverId")
-        .lean();
-      assignedDriverId = session?.assignedDriver?.driverId || null;
-    }
+    const assignedDriverId = session?.assignedDriver?.driverId || null;
 
     try {
       await DeliveryCompanyOrderHandover.create({
