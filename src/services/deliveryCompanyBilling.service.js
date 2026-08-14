@@ -518,7 +518,7 @@ async function listAdminBillingCards(date = new Date()) {
   const companyIds = companies.map((c) => c._id);
   const handoverService = require("./deliveryCompanyHandover.service");
   const [unconfirmedByCompany, currentHandoverCounts, previousHandoverCounts] = await Promise.all([
-    handoverService.countUnconfirmedHandoversByCompanies(companyIds, currentMonthKey),
+    handoverService.countPendingCustomerDeliveriesByCompanies(companyIds),
     handoverService.countHandoversByCompaniesForMonth(companyIds, currentMonthKey),
     handoverService.countHandoversByCompaniesForMonth(companyIds, previousMonthKey),
   ]);

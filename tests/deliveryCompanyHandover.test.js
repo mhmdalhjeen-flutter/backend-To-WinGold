@@ -82,7 +82,9 @@ DeliveryCompanyOrderHandover.findOneAndUpdate = async (query, update) => {
   const key = String(query.order);
   const row = handoverRecords.get(key);
   if (!row) return null;
-  if (query.billingCountApplied === false && row.billingCountApplied !== false) return null;
+  const billingQuery = query.billingCountApplied;
+  if (billingQuery === false && row.billingCountApplied !== false) return null;
+  if (billingQuery?.$ne === true && row.billingCountApplied === true) return null;
   if (update?.$set?.billingCountApplied != null) {
     row.billingCountApplied = update.$set.billingCountApplied;
   }

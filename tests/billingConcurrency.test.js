@@ -150,7 +150,9 @@ function resetHandoverMocks() {
     const key = String(query.order);
     const row = handoverRecords.get(key);
     if (!row) return null;
-    if (query.billingCountApplied === false && row.billingCountApplied !== false) return null;
+    const billingQuery = query.billingCountApplied;
+    if (billingQuery === false && row.billingCountApplied !== false) return null;
+    if (billingQuery?.$ne === true && row.billingCountApplied === true) return null;
     if (update?.$set?.billingCountApplied != null) {
       row.billingCountApplied = update.$set.billingCountApplied;
     }
@@ -326,10 +328,11 @@ test("retry after failed billing increment recovers company count without double
     return originalUpdateOne(query, update);
   };
 
-  await assert.rejects(
-    () => recordStoreHandoverToDeliveryCompany(orderId, { previousStatus: REQUIRED_PREVIOUS_STATUS }),
-    (err) => /فشل زيادة عداد/.test(err.message),
-  );
+  const first = await recordStoreHandoverToDeliveryCompany(orderId, {
+    previousStatus: REQUIRED_PREVIOUS_STATUS,
+  });
+  assert.equal(first.recorded, true);
+  assert.equal(first.billingApplied, false);
 
   const periodAfterFailure = periods.get(periodKey(companyId, "2026-08"));
   assert.equal(periodAfterFailure?.deliveredOrderCount || 0, 0);

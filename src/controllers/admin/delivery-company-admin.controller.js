@@ -181,7 +181,7 @@ async function listCompaniesWithAccounts() {
   if (!companies.length) return [];
 
   const ids = companies.map((c) => c._id);
-  const handoverService = require("../services/deliveryCompanyHandover.service");
+  const handoverService = require("../../services/deliveryCompanyHandover.service");
   const [accounts, portalUsers, lifetimeHandoverCounts] = await Promise.all([
     DeliveryCompanyPaymentAccount.find({ deliveryCompany: { $in: ids } })
       .sort({ type: 1, isActive: -1, createdAt: -1 })

@@ -13,6 +13,20 @@ exports.getDashboardStats = async (req, res) => {
   }
 };
 
+exports.listPendingHandovers = async (req, res) => {
+  try {
+    const companyId = (req.userDoc || req.user)?.deliveryCompanyId;
+    if (!companyId) {
+      return res.status(403).json({ message: "حساب الشركة غير مربوط بشركة توصيل" });
+    }
+    const handoverService = require("../services/deliveryCompanyHandover.service");
+    const handovers = await handoverService.listPendingCustomerDeliveriesForCompany(companyId);
+    res.json({ handovers, count: handovers.length });
+  } catch (err) {
+    res.status(err.status || 500).json({ message: err.message });
+  }
+};
+
 exports.listRequests = async (req, res) => {
   try {
     const history = req.query.history === "true" || req.query.history === "1";

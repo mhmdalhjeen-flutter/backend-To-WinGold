@@ -49,6 +49,7 @@ router.get("/company/billing/payment-methods", deliveryCompanyBillingController.
 router.post("/company/billing/payment", deliveryCompanyBillingController.submitBillingPayment);
 router.get("/company/billing/history", deliveryCompanyBillingController.getBillingHistory);
 router.get("/company/dashboard/stats", deliveryCompanyPortalController.getDashboardStats);
+router.get("/company/pending-handovers", deliveryCompanyPortalController.listPendingHandovers);
 router.get("/company/requests", deliveryCompanyPortalController.listRequests);
 router.get("/company/requests/:requestId", deliveryCompanyPortalController.getRequest);
 router.patch("/company/requests/:requestId/assign-driver", deliveryCompanyPortalController.assignDriver);

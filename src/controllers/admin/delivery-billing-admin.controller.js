@@ -74,13 +74,15 @@ exports.getCompanyHandovers = async (req, res) => {
     const companyId = requireObjectId(req.params.companyId, "companyId");
     const handoverService = require("../../services/deliveryCompanyHandover.service");
     const { getCurrentMonthKey } = require("../../utils/subscriptionMonth.util");
-    const monthKey = req.query.monthKey || getCurrentMonthKey();
     const unconfirmedOnly = req.query.unconfirmedOnly === "1"
       || req.query.unconfirmedOnly === "true";
+    const monthKey = unconfirmedOnly
+      ? (req.query.monthKey || null)
+      : (req.query.monthKey || getCurrentMonthKey());
 
     const handovers = unconfirmedOnly
-      ? await handoverService.listUnconfirmedHandoversForCompany(companyId, monthKey)
-      : await handoverService.listAdminHandoversForMonth(companyId, monthKey);
+      ? await handoverService.listPendingCustomerDeliveriesForCompany(companyId, { monthKey })
+      : await handoverService.listAdminHandoversForMonth(companyId, monthKey || getCurrentMonthKey());
 
     res.json({ monthKey, handovers, unconfirmedOnly });
   } catch (err) {

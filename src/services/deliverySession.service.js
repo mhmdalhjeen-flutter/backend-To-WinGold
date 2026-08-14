@@ -843,12 +843,16 @@ async function getDashboardStats(user) {
   const deliveredStatuses = [...DELIVERED_SESSION_STATUSES];
   const rejectedStatuses = [...REJECTED_SESSION_STATUSES];
 
-  const [pendingConfirmation, assignedToDriver, sentOrders, delivered, rejected] = await Promise.all([
+  const [pendingConfirmation, assignedToDriver, sentOrders, delivered, rejected, pendingCustomerDelivery] = await Promise.all([
     DeliverySession.countDocuments({ ...baseQuery, status: { $in: newStatuses } }),
     DeliverySession.countDocuments({ ...baseQuery, status: { $in: [...ASSIGNED_COMPANY_STATUSES] } }),
     DeliverySession.countDocuments({ ...baseQuery, status: { $in: sentStatuses } }),
     DeliverySession.countDocuments({ ...baseQuery, status: { $in: deliveredStatuses } }),
     DeliverySession.countDocuments({ ...baseQuery, status: { $in: rejectedStatuses } }),
+    (async () => {
+      const handoverService = require("./deliveryCompanyHandover.service");
+      return handoverService.countPendingCustomerDeliveriesForCompany(companyId);
+    })(),
   ]);
 
   return {
@@ -857,6 +861,7 @@ async function getDashboardStats(user) {
     sentOrders,
     delivered,
     rejected,
+    pendingCustomerDelivery,
     // legacy aliases for older clients
     newRequests: pendingConfirmation,
     outForDelivery: sentOrders,
