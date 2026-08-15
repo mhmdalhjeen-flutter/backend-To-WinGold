@@ -32,7 +32,7 @@ const { sendOtp, verifyOtp } = require("../controllers/otp.controller");
 
 const authLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 20 });
 const loginLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
+  windowMs: 30 * 1000,
   max: 10,
   message: "محاولات تسجيل دخول كثيرة — يرجى الانتظار قبل إعادة المحاولة",
 });

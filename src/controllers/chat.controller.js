@@ -15,11 +15,77 @@ const chatNotificationService = require("../services/chatNotification.service");
 
 const CHAT_TEXT_MAX = 2000;
 const CHAT_PARTICIPANT_SELECT = "name phone whatsapp avatar";
+const CONV_UPDATE_MAX_ATTEMPTS = 3;
 
 function invalidateChatUnreadForParticipants(participants) {
     (participants || []).forEach((p) => {
         cache.invalidate(`chat:unread:${p.toString()}`);
     });
+}
+
+function isTransientConcurrencyError(err) {
+    if (!err) return false;
+    if (err.name === "VersionError") return true;
+    if (err.code === 112 || err.codeName === "WriteConflict") return true;
+    return false;
+}
+
+async function withConcurrencyRetry(fn, { maxAttempts = CONV_UPDATE_MAX_ATTEMPTS } = {}) {
+    let lastErr;
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+        try {
+            return await fn(attempt);
+        } catch (err) {
+            lastErr = err;
+            if (!isTransientConcurrencyError(err) || attempt >= maxAttempts) {
+                throw err;
+            }
+        }
+    }
+    throw lastErr;
+}
+
+function buildSendConversationUpdate(participants, senderId, messageId) {
+    const senderStr = senderId.toString();
+    const update = {
+        $set: {
+            lastMessage: messageId,
+            updatedAt: new Date(),
+        },
+    };
+    const unreadIncrements = {};
+    (participants || []).forEach((p) => {
+        const pid = p.toString();
+        if (pid !== senderStr) {
+            unreadIncrements[`unreadCount.${pid}`] = 1;
+        }
+    });
+    if (Object.keys(unreadIncrements).length) {
+        update.$inc = unreadIncrements;
+    }
+    return update;
+}
+
+async function applySendConversationUpdate(convId, userId, participants, messageId) {
+    const filter = { _id: convId, participants: userId };
+    const update = buildSendConversationUpdate(participants, userId, messageId);
+    return withConcurrencyRetry(async () => {
+        const result = await Conversation.updateOne(filter, update);
+        if (result.matchedCount === 0) {
+            const err = new Error("غير مسموح");
+            err.status = 403;
+            throw err;
+        }
+        return result;
+    });
+}
+
+async function resetReaderUnreadCount(convId, userId) {
+    const uid = userId.toString();
+    return withConcurrencyRetry(async () => Conversation.updateOne(
+        { _id: convId, participants: userId },
+        { $set: { [`unreadCount.${uid}`]: 0 } },
+    ));
 }
 
 
@@ -179,8 +245,7 @@ exports.getMessages = async (req, res) => {
             { conversation: convId, sender: { $ne: req.user.id }, read: false },
             { $set: { read: true } }
         );
-        conv.unreadCount.set(req.user.id.toString(), 0);
-        await conv.save();
+        await resetReaderUnreadCount(convId, req.user.id);
         invalidateChatUnreadForParticipants(conv.participants);
 
         res.json({ messages: messages.reverse() });
@@ -222,15 +287,17 @@ exports.sendMessage = async (req, res) => {
 
         const msg = await Message.create(msgData);
 
-        conv.lastMessage = msg._id;
-        conv.updatedAt   = new Date();
-        conv.participants.forEach(p => {
-            const pid = p.toString();
-            if (pid !== req.user.id.toString()) {
-                conv.unreadCount.set(pid, (conv.unreadCount.get(pid) || 0) + 1);
-            }
-        });
-        await conv.save();
+        try {
+            await applySendConversationUpdate(
+                convId,
+                req.user.id,
+                conv.participants,
+                msg._id,
+            );
+        } catch (convErr) {
+            await Message.findByIdAndDelete(msg._id).catch(() => {});
+            throw convErr;
+        }
         invalidateChatUnreadForParticipants(conv.participants);
 
         const populated = await Message.findById(msg._id)
@@ -256,4 +323,13 @@ exports.sendMessage = async (req, res) => {
         if (err.status) return res.status(err.status).json({ message: err.message });
         res.status(500).json({ message: "تعذّر إرسال الرسالة" });
     }
+};
+
+exports._chatConcurrencyInternals = {
+    isTransientConcurrencyError,
+    withConcurrencyRetry,
+    buildSendConversationUpdate,
+    applySendConversationUpdate,
+    resetReaderUnreadCount,
+    CONV_UPDATE_MAX_ATTEMPTS,
 };
