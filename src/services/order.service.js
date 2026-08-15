@@ -44,6 +44,10 @@ function isTransactionUnsupported(err) {
   );
 }
 
+function isTransientWriteConflict(err) {
+  return err?.code === 112 || err?.codeName === "WriteConflict";
+}
+
 async function restoreOrderItemsToCart(userId, orderItems, storeId, session) {
   await restoreItemsToStoreContainer(userId, orderItems, storeId, session);
 }
@@ -556,35 +560,6 @@ async function updateOrderStatusCore(ownerId, orderId, status, session, options 
       throw err;
     }
 
-    if (rewardPointsAwarded > 0) {
-      await notifyOrderPointGift(order, store, rewardPointsAwarded);
-      try {
-        await membershipService.upgradeToMember(order.customer, store._id);
-      } catch (_) {
-        /* non-critical — membership upgrade should not block order confirm */
-      }
-    }
-
-    const confirmTitle = isDeliveryOrder ? "تم قبول طلبك" : "تم تأكيد طلبك من المتجر";
-    const confirmBody = isDeliveryOrder
-      ? `قام ${store.name || "المتجر"} بقبول طلبك — بانتظار شركة التوصيل`
-      : `قام ${store.name || "المتجر"} بتأكيد طلبك رقم ${order.orderNumber || ""}`.trim();
-
-    try {
-      await notificationService.create({
-        user: order.customer,
-        type: "order_confirmed",
-        title: confirmTitle,
-        body: confirmBody,
-        data: {
-          orderId: order._id.toString(),
-          storeId: store._id.toString(),
-          deliveryMethod: order.deliveryMethod || "",
-        },
-      });
-    } catch (_) {
-      /* non-critical */
-    }
     const refreshedStore = await Store.findById(store._id).select("cards bypassCards");
 
     const pointsMessage = rewardPointsAwarded > 0
@@ -596,6 +571,11 @@ async function updateOrderStatusCore(ownerId, orderId, status, session, options 
       order,
       cards: refreshedStore?.cards ?? store.cards,
       bypassCards: refreshedStore?.bypassCards ?? store.bypassCards,
+      postCommitConfirm: {
+        store: { _id: store._id, name: store.name },
+        rewardPointsAwarded,
+        isDeliveryOrder,
+      },
     };
   }
 
@@ -960,6 +940,71 @@ async function runPostCommitHandoverIfNeeded(result) {
   });
 }
 
+/** Post-commit confirm side effects — must not write Store while txn is open. */
+async function runPostCommitConfirmIfNeeded(result) {
+  const confirm = result?.postCommitConfirm;
+  if (!confirm || !result?.order?._id) return null;
+
+  const { safeLog } = require("../utils/logSanitize.util");
+  const order = result.order;
+  const store = confirm.store;
+  const rewardPointsAwarded = Number(confirm.rewardPointsAwarded) || 0;
+  const isDeliveryOrder = Boolean(confirm.isDeliveryOrder);
+
+  if (rewardPointsAwarded > 0) {
+    try {
+      await notifyOrderPointGift(order, store, rewardPointsAwarded);
+    } catch (err) {
+      safeLog("warn", "order_confirm_point_gift_failed", {
+        orderId: String(order._id),
+        message: err?.message,
+      });
+    }
+    try {
+      await membershipService.upgradeToMember(order.customer, store._id);
+    } catch (err) {
+      safeLog("warn", "order_confirm_membership_failed", {
+        orderId: String(order._id),
+        message: err?.message,
+      });
+    }
+  }
+
+  const confirmTitle = isDeliveryOrder ? "تم قبول طلبك" : "تم تأكيد طلبك من المتجر";
+  const confirmBody = isDeliveryOrder
+    ? `قام ${store.name || "المتجر"} بقبول طلبك — بانتظار شركة التوصيل`
+    : `قام ${store.name || "المتجر"} بتأكيد طلبك رقم ${order.orderNumber || ""}`.trim();
+
+  try {
+    await notificationService.create({
+      user: order.customer,
+      type: "order_confirmed",
+      title: confirmTitle,
+      body: confirmBody,
+      data: {
+        orderId: order._id.toString(),
+        storeId: store._id.toString(),
+        deliveryMethod: order.deliveryMethod || "",
+      },
+    });
+  } catch (err) {
+    safeLog("warn", "order_confirm_notify_failed", {
+      orderId: String(order._id),
+      message: err?.message,
+    });
+  }
+
+  return true;
+}
+
+async function runPostCommitSideEffects(result) {
+  await runPostCommitConfirmIfNeeded(result);
+  await runPostCommitHandoverIfNeeded(result);
+  if (result?.order?._id) {
+    await syncDeliverySessionAfterOrderUpdate(result.order);
+  }
+}
+
 /** Sync delivery session after order status commit — routes handoff vs generic sync. */
 async function syncDeliverySessionAfterOrderUpdate(order) {
   if (!order?._id) return;
@@ -984,30 +1029,44 @@ async function syncDeliverySessionAfterOrderUpdate(order) {
   }
 }
 
-async function updateOrderStatus(ownerId, orderId, status, options = {}) {
+async function executeOrderStatusUpdate(ownerId, orderId, status, options = {}) {
   const session = await mongoose.startSession();
   try {
     session.startTransaction();
     const result = await updateOrderStatusCore(ownerId, orderId, status, session, options);
     await session.commitTransaction();
-    await runPostCommitHandoverIfNeeded(result);
-    if (result?.order?._id) {
-      await syncDeliverySessionAfterOrderUpdate(result.order);
-    }
+    await runPostCommitSideEffects(result);
     return result;
   } catch (err) {
     await session.abortTransaction().catch(() => {});
     if (isTransactionUnsupported(err)) {
       const result = await updateOrderStatusCore(ownerId, orderId, status, null, options);
-      await runPostCommitHandoverIfNeeded(result);
-      if (result?.order?._id) {
-        await syncDeliverySessionAfterOrderUpdate(result.order);
-      }
+      await runPostCommitSideEffects(result);
       return result;
     }
     throw err;
   } finally {
     session.endSession();
+  }
+}
+
+async function updateOrderStatus(ownerId, orderId, status, options = {}) {
+  const maxAttempts = 3;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      return await executeOrderStatusUpdate(ownerId, orderId, status, options);
+    } catch (err) {
+      if (isTransientWriteConflict(err) && attempt < maxAttempts) {
+        const { safeLog } = require("../utils/logSanitize.util");
+        safeLog("warn", "order_status_write_conflict_retry", {
+          orderId: String(orderId),
+          status,
+          attempt,
+        });
+        continue;
+      }
+      throw err;
+    }
   }
 }
 
