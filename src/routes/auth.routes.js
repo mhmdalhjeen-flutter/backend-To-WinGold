@@ -29,12 +29,29 @@ const {
 } = require("../controllers/password.controller");
 
 const { sendOtp, verifyOtp } = require("../controllers/otp.controller");
+const {
+  loginAccountRateLimitKey,
+  loginIpRateLimitKey,
+} = require("../utils/loginRateLimitKey.util");
 
 const authLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 20 });
+const LOGIN_RATE_LIMIT_MESSAGE = "محاولات تسجيل دخول كثيرة — يرجى الانتظار قبل إعادة المحاولة";
+const loginAccountLimiter = rateLimit({
+  windowMs: 30 * 1000,
+  max: 10,
+  message: LOGIN_RATE_LIMIT_MESSAGE,
+  keyFn: loginAccountRateLimitKey,
+});
+const loginIpCeilingLimiter = rateLimit({
+  windowMs: 30 * 1000,
+  max: 50,
+  message: LOGIN_RATE_LIMIT_MESSAGE,
+  keyFn: loginIpRateLimitKey,
+});
 const loginLimiter = rateLimit({
   windowMs: 30 * 1000,
   max: 10,
-  message: "محاولات تسجيل دخول كثيرة — يرجى الانتظار قبل إعادة المحاولة",
+  message: LOGIN_RATE_LIMIT_MESSAGE,
 });
 const verifyRequestLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -83,7 +100,7 @@ router.post("/verify-otp", otpVerifyLimiter, verifyOtp);
 
 router.post("/register-customer", authLimiter, registerCustomer);
 router.post("/register-business", authLimiter, registerBusiness);
-router.post("/login", loginLimiter, login);
+router.post("/login", loginAccountLimiter, loginIpCeilingLimiter, login);
 router.post("/delivery/check-phone", loginLimiter, checkDeliveryPortalPhone);
 router.post("/delivery/activate", loginLimiter, activateDeliveryPortal);
 router.post("/delivery/driver/verify-password", loginLimiter, verifyDriverRegistrationPassword);
