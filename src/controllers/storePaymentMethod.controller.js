@@ -90,7 +90,7 @@ exports.getPaymentMethodTypes = async (_req, res) => {
 exports.getActiveStorePaymentMethods = async (req, res) => {
   try {
     const storeId = req.params.storeId;
-    const store = await Store.findById(storeId).select("_id name isActive paymentMethods").lean();
+    const store = await Store.findById(storeId).select("_id name isActive paymentMethods receivingMethods").lean();
     if (!store) {
       return res.status(404).json({ message: "المتجر غير موجود" });
     }
@@ -102,6 +102,7 @@ exports.getActiveStorePaymentMethods = async (req, res) => {
       paymentSettings,
       enabledPaymentMethods,
       methods,
+      receivingMethods: store.receivingMethods || {},
     });
   } catch (error) {
     res.status(error.status || 500).json({ message: error.message });

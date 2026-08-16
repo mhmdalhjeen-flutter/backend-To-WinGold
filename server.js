@@ -304,6 +304,9 @@ const startServer = async () => {
 
             setInterval(() => {
                 monitorOffers();
+            }, 60 * 60 * 1000);
+
+            setInterval(() => {
                 monitorBazaar();
                 monitorStoreSubscriptions();
                 monitorDeliveryBilling();
