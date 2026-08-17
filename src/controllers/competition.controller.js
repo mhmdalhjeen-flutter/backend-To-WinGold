@@ -15,7 +15,7 @@ async function processCompetitionImages(body) {
 }
 
 const PUBLIC_FIELDS =
-  "title description image minPoints pointsPerEntry requiredParticipants location startDate endDate isFeatured status totalEntries participants prizeName prizeImage drawLink createdAt";
+  "title description image minPoints pointsPerEntry requiredParticipants location startDate endDate isFeatured status totalEntries participants prizeName prizeImage drawLink cardBackgroundColor useImageAsCardBackground createdAt";
 
 function isCompetitionEnded(comp) {
   if (!comp) return false;

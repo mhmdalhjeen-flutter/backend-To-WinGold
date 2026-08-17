@@ -84,10 +84,41 @@ test("buildGiftCodesExcelBuffer uses Card Studio 5-column header order", async (
   const data = sheet.getRow(2).values.slice(1);
   assert.equal(data[0], "متجر إياد");
   assert.equal(data[1], "WG-TEST-001");
-  assert.match(String(data[2]), /\?gift=WG-TEST-001/);
+  assert.equal(data[2], "https://wingolgmoll.com/?gift=WG-TEST-001");
   assert.equal(data[3], 20);
   assert.equal(data[4], "مستقل");
   assert.equal(sheet.columnCount, 5);
+  assert.doesNotMatch(String(data[2]), /mhmdalhjeen\.workers\.dev/);
+});
+
+test("buildGiftCodesExcelBuffer QR Value uses wingolgmoll.com with exact gift code", async () => {
+  const giftCode = "E113-7F3121";
+  const buffer = await buildGiftCodesExcelBuffer({
+    codes: [{ code: giftCode, cardSource: "independent", rewardPoints: 20 }],
+    storeName: "Test Store",
+  });
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.load(buffer);
+  const data = workbook.worksheets[0].getRow(2).values.slice(1);
+  assert.equal(data[1], giftCode);
+  assert.equal(data[2], `https://wingolgmoll.com/?gift=${giftCode}`);
+  assert.equal(data[3], 20);
+  assert.equal(data[4], "مستقل");
+});
+
+test("buildGiftActivationUrl avoids double https and nested gift URLs", () => {
+  const { buildGiftActivationUrl } = require("../src/utils/giftActivationUrl.util");
+  assert.equal(
+    buildGiftActivationUrl("https://wingolgmoll.com", "E113-7F3121"),
+    "https://wingolgmoll.com/?gift=E113-7F3121",
+  );
+  assert.equal(
+    buildGiftActivationUrl(
+      "https://https://wingolgmoll.com",
+      "https://win-gold-shopping.mhmdalhjeen.workers.dev/?gift=E113-7F3121",
+    ),
+    "https://wingolgmoll.com/?gift=E113-7F3121",
+  );
 });
 
 test("normalizeExportCodeRow maps cardSource and rewardPoints", () => {

@@ -37,6 +37,10 @@ const competitionSchema = new mongoose.Schema(
     // المسابقات المعروضة في الصفحة الرئيسية (حتى اثنتين).
     isFeatured: { type: Boolean, default: false },
 
+    // إعدادات خلفية كرت المسابقة (للعرض فقط).
+    cardBackgroundColor: { type: String, default: "", trim: true },
+    useImageAsCardBackground: { type: Boolean, default: false },
+
     status: {
       type: String,
       enum: ["draft", "active", "ended"],
