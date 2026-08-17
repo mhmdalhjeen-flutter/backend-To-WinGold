@@ -665,7 +665,7 @@ async function findSubscriptionPaperPromoCodes(period) {
   let codes = [];
   if (linkedIds.length) {
     codes = await PromoCode.find({ _id: { $in: linkedIds } })
-      .select("code cardSource subscriptionPeriodId")
+      .select("code cardSource subscriptionPeriodId rewardPoints")
       .lean();
   }
 
@@ -678,7 +678,7 @@ async function findSubscriptionPaperPromoCodes(period) {
       subscriptionPeriodId: period._id,
       cardSource: CARD_SOURCES.SUBSCRIPTION,
     })
-      .select("code cardSource subscriptionPeriodId")
+      .select("code cardSource subscriptionPeriodId rewardPoints")
       .sort({ createdAt: 1 })
       .lean();
   }
@@ -726,6 +726,7 @@ async function getSubscriptionPaperCodesForExport(periodId) {
     codes: codes.map((row) => ({
       code: row.code,
       source: CARD_SOURCES.SUBSCRIPTION,
+      rewardPoints: row.rewardPoints,
     })),
   };
 }

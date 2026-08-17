@@ -261,7 +261,7 @@ exports.exportOrderCodes = async (req, res) => {
         }
 
         const promoCodes = await PromoCode.find({ _id: { $in: order.codes } })
-            .select("code cardSource")
+            .select("code cardSource rewardPoints")
             .lean();
 
         const promoById = new Map(promoCodes.map((row) => [String(row._id), row]));
@@ -272,6 +272,7 @@ exports.exportOrderCodes = async (req, res) => {
             .map((promoCode) => ({
                 code: promoCode.code,
                 source: promoCode.cardSource || CARD_SOURCES.INDEPENDENT,
+                rewardPoints: promoCode.rewardPoints,
             }))
             .filter((row) => row.code);
 
@@ -367,7 +368,11 @@ exports.exportDirectPhysicalCodes = async (req, res) => {
 
         const codeStrings = codes.slice(0, 500).map((c) => {
             if (typeof c === "string") return { code: c, source: CARD_SOURCES.INDEPENDENT };
-            return { code: c?.code, source: c?.cardSource || CARD_SOURCES.INDEPENDENT };
+            return {
+                code: c?.code,
+                source: c?.cardSource || CARD_SOURCES.INDEPENDENT,
+                rewardPoints: c?.rewardPoints ?? c?.points,
+            };
         }).filter((row) => row.code);
 
         if (!codeStrings.length)

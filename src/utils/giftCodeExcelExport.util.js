@@ -11,13 +11,15 @@ function excelColWidthForText(text, min = 12, max = 60) {
 
 function normalizeExportCodeRow(code) {
   if (typeof code === "string") {
-    return { code, source: CARD_SOURCES.INDEPENDENT };
+    return { code, source: CARD_SOURCES.INDEPENDENT, points: null };
   }
+  const rawPoints = code?.points ?? code?.rewardPoints;
   return {
     code: code?.code || "",
     source: code?.source === CARD_SOURCES.SUBSCRIPTION
       ? CARD_SOURCES.SUBSCRIPTION
       : CARD_SOURCES.INDEPENDENT,
+    points: rawPoints == null ? null : Number(rawPoints),
   };
 }
 
@@ -54,8 +56,9 @@ async function buildGiftCodesExcelBuffer({ codes, storeName }) {
   worksheet.columns = [
     { header: "Store Name", key: "store", width: 20 },
     { header: "Gift Code", key: "code", width: 20 },
-    { header: "مصدر الكرت", key: "source", width: 16 },
     { header: "QR Value", key: "qrValue", width: 40 },
+    { header: "Points", key: "points", width: 14 },
+    { header: "Card Source", key: "source", width: 16 },
   ];
 
   const headerRow = worksheet.getRow(1);
@@ -83,8 +86,9 @@ async function buildGiftCodesExcelBuffer({ codes, storeName }) {
 
   let maxStoreWidth = excelColWidthForText("Store Name");
   let maxCodeWidth = excelColWidthForText("Gift Code");
-  let maxSourceWidth = excelColWidthForText("Card Source");
   let maxQrWidth = excelColWidthForText("QR Value", 20, 80);
+  let maxPointsWidth = excelColWidthForText("Points", 12, 20);
+  let maxSourceWidth = excelColWidthForText("Card Source");
 
   for (const rowData of normalizedCodes) {
     const qrValue = buildGiftActivationUrl(websiteUrl, rowData.code);
@@ -94,6 +98,7 @@ async function buildGiftCodesExcelBuffer({ codes, storeName }) {
       code: rowData.code,
       source: sourceLabel,
       qrValue,
+      points: rowData.points,
     });
 
     row.getCell(1).alignment = {
@@ -109,26 +114,36 @@ async function buildGiftCodesExcelBuffer({ codes, storeName }) {
     };
     row.getCell(3).alignment = {
       vertical: "middle",
-      horizontal: "center",
-      readingOrder: "ltr",
-    };
-    row.getCell(4).alignment = {
-      vertical: "middle",
       horizontal: "left",
       readingOrder: "ltr",
       wrapText: false,
     };
+    row.getCell(4).alignment = {
+      vertical: "middle",
+      horizontal: "center",
+      readingOrder: "ltr",
+    };
+    row.getCell(5).alignment = {
+      vertical: "middle",
+      horizontal: "center",
+      readingOrder: "ltr",
+    };
 
     maxStoreWidth = Math.max(maxStoreWidth, excelColWidthForText(storeName));
     maxCodeWidth = Math.max(maxCodeWidth, excelColWidthForText(rowData.code, 14, 36));
-    maxSourceWidth = Math.max(maxSourceWidth, excelColWidthForText(sourceLabel, 12, 24));
     maxQrWidth = Math.max(maxQrWidth, excelColWidthForText(qrValue, 20, 80));
+    maxPointsWidth = Math.max(
+      maxPointsWidth,
+      excelColWidthForText(rowData.points == null ? "" : String(rowData.points), 12, 20),
+    );
+    maxSourceWidth = Math.max(maxSourceWidth, excelColWidthForText(sourceLabel, 12, 24));
   }
 
   worksheet.getColumn(1).width = maxStoreWidth;
   worksheet.getColumn(2).width = maxCodeWidth;
-  worksheet.getColumn(3).width = maxSourceWidth;
-  worksheet.getColumn(4).width = maxQrWidth;
+  worksheet.getColumn(3).width = maxQrWidth;
+  worksheet.getColumn(4).width = maxPointsWidth;
+  worksheet.getColumn(5).width = maxSourceWidth;
 
   return workbook.xlsx.writeBuffer();
 }
