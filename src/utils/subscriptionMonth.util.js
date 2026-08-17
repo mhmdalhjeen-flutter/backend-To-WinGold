@@ -15,9 +15,10 @@ function isMonthKeyExpired(monthKey, date = new Date()) {
 
 function sanitizeExportFilename(name) {
   const cleaned = String(name || "store")
-    .replace(/[^\w\u0600-\u06FF\s-]/g, "")
+    .replace(/[\\/:*?"<>|]/g, "")
+    .replace(/[\x00-\x1f]/g, "")
     .trim()
-    .replace(/\s+/g, "-");
+    .replace(/[. ]+$/, "");
   return cleaned || "store";
 }
 

@@ -9,9 +9,10 @@ const {
   isExcelExportRequest,
 } = require("../src/utils/excelDownload.util");
 const { buildGiftCodesExcelBuffer } = require("../src/utils/giftCodeExcelExport.util");
+const ExcelJS = require("exceljs");
 
 test("buildAttachmentContentDisposition uses ASCII fallback and UTF-8 filename*", () => {
-  const header = buildAttachmentContentDisposition("متجر-الذهب-gift-codes.xlsx");
+  const header = buildAttachmentContentDisposition("متجر إياد.xlsx");
   assert.match(header, /^attachment; filename="[^"]+"; filename\*=UTF-8''/);
   assert.match(header, /%D9%85%D8%AA%D8%AC%D8%B1/);
 });
@@ -42,4 +43,33 @@ test("buildGiftCodesExcelBuffer rejects empty code list with status 400", async 
     () => buildGiftCodesExcelBuffer({ codes: [], storeName: "Store" }),
     (err) => err.status === 400,
   );
+});
+
+test("buildGiftCodesExcelBuffer uses Card Studio 5-column header order", async () => {
+  const buffer = await buildGiftCodesExcelBuffer({
+    codes: [{
+      code: "WG-TEST-001",
+      source: "independent",
+      rewardPoints: 20,
+    }],
+    storeName: "متجر إياد",
+  });
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.load(buffer);
+  const sheet = workbook.worksheets[0];
+  const header = sheet.getRow(1).values.slice(1);
+  assert.deepEqual(header, [
+    "Store Name",
+    "Gift Code",
+    "QR Value",
+    "Points",
+    "Card Source",
+  ]);
+  const data = sheet.getRow(2).values.slice(1);
+  assert.equal(data[0], "متجر إياد");
+  assert.equal(data[1], "WG-TEST-001");
+  assert.match(String(data[2]), /\?gift=WG-TEST-001/);
+  assert.equal(data[3], 20);
+  assert.equal(data[4], "مستقل");
+  assert.equal(sheet.columnCount, 5);
 });

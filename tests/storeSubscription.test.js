@@ -22,7 +22,6 @@ const {
 const {
   getCurrentMonthKey,
   isMonthKeyExpired,
-  sanitizeExportFilename,
 } = require("../src/utils/subscriptionMonth.util");
 const {
   CARD_SOURCES,
@@ -164,9 +163,9 @@ tests.push(test("paper export contains card source label", () => {
 tests.push(test("exported filename uses store name", () => {
   assert.strictEqual(
     buildGiftCodesExportFilename("Golden Store"),
-    `${sanitizeExportFilename("Golden Store")}-gift-codes.xlsx`,
+    "Golden Store.xlsx",
   );
-  assert.strictEqual(buildGiftCodesExportFilename("متجر الذهب"), "متجر-الذهب-gift-codes.xlsx");
+  assert.strictEqual(buildGiftCodesExportFilename("متجر إياد"), "متجر إياد.xlsx");
 }));
 
 tests.push(test("approved payment creates subscription cards (issuance plan)", () => {

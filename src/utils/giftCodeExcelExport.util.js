@@ -29,7 +29,7 @@ function formatCardSourceLabel(source) {
 
 function buildGiftCodesExportFilename(storeName) {
   const safeName = sanitizeExportFilename(storeName);
-  return `${safeName}-gift-codes.xlsx`;
+  return `${safeName}.xlsx`;
 }
 
 async function buildGiftCodesExcelBuffer({ codes, storeName }) {
