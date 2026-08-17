@@ -25,8 +25,10 @@ function normalizeExcelBuffer(value) {
  */
 function sendExcelDownload(res, buffer, filename) {
   const xlsxBuffer = normalizeExcelBuffer(buffer);
+  const fullName = String(filename || "export.xlsx").trim() || "export.xlsx";
   res.setHeader("Content-Type", EXCEL_MIME);
-  res.setHeader("Content-Disposition", buildAttachmentContentDisposition(filename));
+  res.setHeader("Content-Disposition", buildAttachmentContentDisposition(fullName));
+  res.setHeader("X-Download-Filename", encodeURIComponent(fullName));
   res.setHeader("Content-Length", String(xlsxBuffer.length));
   res.setHeader("Cache-Control", "no-store");
   res.set("X-No-Compression", "1");

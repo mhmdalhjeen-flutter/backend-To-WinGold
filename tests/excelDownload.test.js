@@ -17,6 +17,22 @@ test("buildAttachmentContentDisposition uses ASCII fallback and UTF-8 filename*"
   assert.match(header, /%D9%85%D8%AA%D8%AC%D8%B1/);
 });
 
+test("sendExcelDownload sets X-Download-Filename for cross-origin clients", () => {
+  const { sendExcelDownload } = require("../src/utils/excelDownload.util");
+  const res = {
+    headers: {},
+    setHeader(name, value) {
+      this.headers[name] = value;
+    },
+    set(name, value) {
+      this.headers[name] = value;
+    },
+    end() {},
+  };
+  sendExcelDownload(res, Buffer.from("test"), "متجر إياد.xlsx");
+  assert.equal(decodeURIComponent(res.headers["X-Download-Filename"]), "متجر إياد.xlsx");
+});
+
 test("normalizeExcelBuffer accepts Buffer", () => {
   const input = Buffer.from("abc");
   assert.equal(normalizeExcelBuffer(input), input);
@@ -49,7 +65,7 @@ test("buildGiftCodesExcelBuffer uses Card Studio 5-column header order", async (
   const buffer = await buildGiftCodesExcelBuffer({
     codes: [{
       code: "WG-TEST-001",
-      source: "independent",
+      cardSource: "independent",
       rewardPoints: 20,
     }],
     storeName: "متجر إياد",
@@ -72,4 +88,16 @@ test("buildGiftCodesExcelBuffer uses Card Studio 5-column header order", async (
   assert.equal(data[3], 20);
   assert.equal(data[4], "مستقل");
   assert.equal(sheet.columnCount, 5);
+});
+
+test("normalizeExportCodeRow maps cardSource and rewardPoints", () => {
+  const { normalizeExportCodeRow } = require("../src/utils/giftCodeExcelExport.util");
+  const row = normalizeExportCodeRow({
+    code: "WG-001",
+    cardSource: "independent",
+    rewardPoints: 25,
+  });
+  assert.equal(row.code, "WG-001");
+  assert.equal(row.points, 25);
+  assert.equal(row.source, "independent");
 });

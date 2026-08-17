@@ -328,6 +328,12 @@ exports.generateDirectStoreCodes = async (req, res) => {
 
         const digitalCodes = created.slice(0, digitalQty);
         const physicalCodes = created.slice(digitalQty);
+        const serializeGeneratedCode = (doc) => ({
+            _id: doc._id,
+            code: doc.code,
+            rewardPoints: doc.rewardPoints,
+            cardSource: doc.cardSource || CARD_SOURCES.INDEPENDENT,
+        });
 
         if (digitalQty > 0) {
             await storeCardInventoryService.addCardsToStore(safeStoreId, {
@@ -342,8 +348,8 @@ exports.generateDirectStoreCodes = async (req, res) => {
             message: `تم توليد ${digitalQty} رقمي + ${physicalQty} ورقي`,
             storeId: safeStoreId,
             storeName: storeDoc.name,
-            digitalCodes,
-            physicalCodes,
+            digitalCodes: digitalCodes.map(serializeGeneratedCode),
+            physicalCodes: physicalCodes.map(serializeGeneratedCode),
             pointsPerCard: points,
         });
     } catch (err) {
@@ -366,20 +372,38 @@ exports.exportDirectPhysicalCodes = async (req, res) => {
         const storeDoc = await Store.findById(safeStoreId).select("name");
         if (!storeDoc) return res.status(404).json({ message: "المتجر غير موجود" });
 
-        const codeStrings = codes.slice(0, 500).map((c) => {
-            if (typeof c === "string") return { code: c, source: CARD_SOURCES.INDEPENDENT };
+        const inputCodes = codes.slice(0, 500).map((c) => {
+            if (typeof c === "string") return { code: c };
             return {
                 code: c?.code,
-                source: c?.cardSource || CARD_SOURCES.INDEPENDENT,
+                cardSource: c?.cardSource,
                 rewardPoints: c?.rewardPoints ?? c?.points,
             };
         }).filter((row) => row.code);
 
-        if (!codeStrings.length)
+        if (!inputCodes.length)
             return res.status(400).json({ message: "لا توجد أكواد صالحة للتصدير" });
 
+        const codeList = inputCodes.map((row) => row.code);
+        const promoDocs = await PromoCode.find({
+            store: safeStoreId,
+            code: { $in: codeList },
+        })
+            .select("code rewardPoints cardSource")
+            .lean();
+        const promoByCode = new Map(promoDocs.map((row) => [row.code, row]));
+
+        const exportCodes = inputCodes.map((row) => {
+            const dbRow = promoByCode.get(row.code);
+            return {
+                code: row.code,
+                source: row.cardSource || dbRow?.cardSource || CARD_SOURCES.INDEPENDENT,
+                rewardPoints: row.rewardPoints ?? dbRow?.rewardPoints,
+            };
+        });
+
         const xlsxBuffer = await buildGiftCodesExcelBuffer({
-            codes: codeStrings,
+            codes: exportCodes,
             storeName: storeDoc.name,
         });
 

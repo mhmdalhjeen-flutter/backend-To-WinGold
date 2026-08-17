@@ -13,13 +13,15 @@ function normalizeExportCodeRow(code) {
   if (typeof code === "string") {
     return { code, source: CARD_SOURCES.INDEPENDENT, points: null };
   }
+  const rawSource = code?.source ?? code?.cardSource;
   const rawPoints = code?.points ?? code?.rewardPoints;
+  const pointsNum = rawPoints == null ? null : Number(rawPoints);
   return {
     code: code?.code || "",
-    source: code?.source === CARD_SOURCES.SUBSCRIPTION
+    source: rawSource === CARD_SOURCES.SUBSCRIPTION
       ? CARD_SOURCES.SUBSCRIPTION
       : CARD_SOURCES.INDEPENDENT,
-    points: rawPoints == null ? null : Number(rawPoints),
+    points: pointsNum != null && !Number.isNaN(pointsNum) ? pointsNum : null,
   };
 }
 
