@@ -48,7 +48,7 @@ router.get("/:id", async (req, res) => {
     try {
         const id = requireObjectId(req.params.id, "id");
         const product = await Product.findById(id)
-            .populate("store", "name phone whatsapp region subRegion logo category owner");
+            .populate("store", "name phone whatsapp region subRegion logo category owner isOpen");
 
         if (!product) {
             return res.status(404).json({ message: "العنصر غير موجود" });

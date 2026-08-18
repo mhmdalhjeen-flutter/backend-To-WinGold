@@ -30,6 +30,7 @@ const bazaarRoutes = require("./bazaar.routes");
 const achievementRoutes = require("./achievement.routes");
 const deliveryCompanyRoutes = require("./deliveryCompany.routes");
 const deliveryRoutes = require("./delivery.routes");
+const reservationRoutes = require("./reservation.routes");
 const { createPricingRouter } = require("./pricing.routes");
 
 /**
@@ -73,6 +74,7 @@ function createApiRouter() {
   router.use("/achievements", achievementRoutes);
   router.use("/delivery-companies", deliveryCompanyRoutes);
   router.use("/delivery", deliveryRoutes);
+  router.use("/reservations", reservationRoutes);
   router.use("/pricing", createPricingRouter());
 
   return router;

@@ -1,4 +1,5 @@
 const mongoose = require("mongoose");
+const { reservationSettingsSchema } = require("./schemas/reservationSettings.schema");
 
 const productSchema = new mongoose.Schema({
     name: {
@@ -95,7 +96,11 @@ const productSchema = new mongoose.Schema({
         type: Boolean,
         default: true,
     },
-    
+
+    reservationSettings: {
+        type: reservationSettingsSchema,
+        default: () => ({ enabled: false, fields: [] }),
+    },
 
 }, {
     timestamps: true,

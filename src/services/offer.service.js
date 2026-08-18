@@ -19,13 +19,13 @@ const { buildUserSignals, sortOffersPersonalized, sortOffersByRank } = require("
 const { getDescendantIds } = require("../utils/region.util");
 
 const LIST_OFFER_SELECT =
-  "title description offerType originalPrice value finalPrice currency priceUnit purchaseMode isActive priority featuredPriority displayPriority views shareCount createdAt expiresAt image bogoGetQuantity bogoBuyQuantity freeItemName customLabel store";
+  "title description offerType originalPrice value finalPrice currency priceUnit purchaseMode reservationSettings isActive priority featuredPriority displayPriority views shareCount createdAt expiresAt image bogoGetQuantity bogoBuyQuantity freeItemName customLabel store";
 
 const STORE_POPULATE_SELECT =
-  "name logo region subRegion category categoryId ratingAvg ratingCount regionId subRegionId isVerifiedStore owner";
+  "name logo region subRegion category categoryId ratingAvg ratingCount regionId subRegionId isVerifiedStore owner isOpen";
 
 const PRODUCT_LIST_SELECT =
-  "name description price currency priceUnit purchaseMode image stock freeDelivery ratingAvg ratingCount displayPriority store createdAt";
+  "name description price currency priceUnit purchaseMode reservationSettings image stock freeDelivery ratingAvg ratingCount displayPriority store createdAt";
 
 const { resolveListImageField, resolveStoreMediaFields } = require("../utils/mediaDelivery.util");
 const { applyProductDisplayPrioritySort } = require("../utils/displayPriority.util");
@@ -257,7 +257,7 @@ async function recordOfferShare(offerId) {
 async function getOfferById(offerId, { incrementViews = false, userId, clientId } = {}) {
   const offer = await Offer.findById(offerId).populate(
     "store",
-    "name phone whatsapp region subRegion logo category owner isVerifiedStore ratingAvg ratingCount"
+    "name phone whatsapp region subRegion logo category owner isVerifiedStore ratingAvg ratingCount isOpen"
   );
 
   if (!offer || !isOfferPubliclyVisible(offer)) {
@@ -423,7 +423,7 @@ async function getDashboardOffers(user, query = {}) {
       expiresAt: { $gt: new Date() },
     })
       .select(LIST_OFFER_SELECT)
-      .populate("store", "name logo category region subRegion isVerifiedStore")
+      .populate("store", "name logo category region subRegion isVerifiedStore isOpen")
       .sort({ priority: -1, createdAt: -1 })
       .limit(networkLimit)
       .lean();

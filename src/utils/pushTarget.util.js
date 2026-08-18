@@ -20,6 +20,8 @@ const CUSTOMER_PUSH_TYPES = new Set([
   "delivery_completed",
   "order_delivered",
   "chat_message",
+  "reservation_accepted",
+  "reservation_rejected",
 ]);
 
 const STORE_PUSH_TYPES = new Set([
@@ -29,6 +31,7 @@ const STORE_PUSH_TYPES = new Set([
   "delivery_order_included",
   "delivery_store_update",
   "chat_message",
+  "store_new_reservation",
 ]);
 
 /** Delivery portal (company + driver) — only when pushApp is not set on shared types. */
@@ -143,6 +146,14 @@ function resolveCustomerPushUrl(type, data = {}) {
       if (conversationId) return `/chat/${conversationId}`;
       return "/chat";
     }
+    case "reservation_accepted":
+    case "reservation_rejected": {
+      const itemId = data.itemId != null ? String(data.itemId) : "";
+      const itemType = String(data.itemType || "");
+      if (itemId && itemType === "Offer") return `/offer/${itemId}`;
+      if (itemId) return `/product/${itemId}`;
+      return "/notifications";
+    }
     default:
       if (orderId) return `/orders/${orderId}`;
       return "/notifications";
@@ -174,6 +185,8 @@ function resolveStorePushUrl(type, data = {}) {
       if (conversationId) return `/store/chat/${conversationId}`;
       return "/store/chats";
     }
+    case "store_new_reservation":
+      return "/store/reservations";
     default:
       if (orderId) return `/store/orders/${orderId}`;
       return "/store/notifications";

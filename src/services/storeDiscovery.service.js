@@ -207,7 +207,7 @@ async function browseStores({ userId, region, regionId, category, categoryId, q 
   }
 
   const stores = (await Store.find(query)
-    .select("name logo region subRegion category categoryId description customersCount ratingAvg ratingCount totalVisits codesEntered createdAt codePrefix regionId subRegionId whatsapp phone address isVerifiedStore displayPriority")
+    .select("name logo region subRegion category categoryId description customersCount ratingAvg ratingCount totalVisits codesEntered createdAt codePrefix regionId subRegionId whatsapp phone address isVerifiedStore displayPriority isOpen")
     .sort({ displayPriority: -1, createdAt: -1 })
     .limit(MAX_DISCOVERY_STORES)
     .lean()).map(stripBase64Logo);
@@ -330,7 +330,7 @@ async function storesByRegions({ q, regionId, categoryId } = {}) {
   const [regions, stores] = await Promise.all([
     Region.find({ isActive: true, parent: null }).sort({ sortOrder: 1, name: 1 }).lean(),
     Store.find(storeQuery)
-      .select("name logo region subRegion category ratingAvg ratingCount regionId subRegionId displayPriority createdAt")
+      .select("name logo region subRegion category ratingAvg ratingCount regionId subRegionId displayPriority createdAt isOpen")
       .sort({ displayPriority: -1, createdAt: -1 })
       .limit(MAX_DISCOVERY_STORES)
       .lean()
@@ -379,7 +379,7 @@ async function suggestNearestStore({ region, category, excludeIds = [] }) {
     isActive: true,
     category,
   })
-    .select("name logo region subRegion category ratingAvg ratingCount")
+    .select("name logo region subRegion category ratingAvg ratingCount isOpen")
     .lean()).map(stripBase64Logo);
 
   if (!candidates.length) return null;
@@ -391,7 +391,7 @@ async function suggestNearestStore({ region, category, excludeIds = [] }) {
 }
 
 const POINTS_STORE_SELECT =
-  "name logo coverImage region subRegion category categoryId description customersCount ratingAvg ratingCount regionId subRegionId isVerifiedStore codePrefix displayPriority createdAt";
+  "name logo coverImage region subRegion category categoryId description customersCount ratingAvg ratingCount regionId subRegionId isVerifiedStore codePrefix displayPriority createdAt isOpen";
 
 async function getPointsProgramStoreIds() {
   const visibleIds = await getCustomerVisibleStoreIds();

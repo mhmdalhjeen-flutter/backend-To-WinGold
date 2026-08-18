@@ -1,4 +1,5 @@
 const mongoose = require("mongoose");
+const { reservationSettingsSchema } = require("./schemas/reservationSettings.schema");
 
 const offerSchema = new mongoose.Schema({
     title: { 
@@ -153,6 +154,11 @@ const offerSchema = new mongoose.Schema({
     createdBy: {
         type: mongoose.Schema.Types.ObjectId,
         ref: "User",
+    },
+
+    reservationSettings: {
+        type: reservationSettingsSchema,
+        default: () => ({ enabled: false, fields: [] }),
     },
 
 }, {

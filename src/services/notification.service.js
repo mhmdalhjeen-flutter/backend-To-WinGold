@@ -113,6 +113,10 @@ function enrichNotificationData(type, data = {}) {
     const id = toIdString(safe.listingId);
     if (id) safe.listingId = id;
   }
+  if (safe.reservationId != null) {
+    const id = toIdString(safe.reservationId);
+    if (id) safe.reservationId = id;
+  }
 
   return safe;
 }

@@ -7,6 +7,7 @@ const storeSubscriberNotification = require("../services/storeSubscriberNotifica
 const { computeOfferFinalPrice, attachPricingToOffer } = require("../services/pricing.service");
 const { normalizeCurrency } = require("../utils/currency.util");
 const { normalizePurchaseMode } = require("../constants/purchaseMode.constants");
+const { normalizeReservationSettings } = require("../utils/reservationSettings.util");
 const { resolveNetworkStoreIds } = require("../utils/offerFeed.util");
 const { processDataUrlImage } = require("../utils/imageProcess.util");
 const { resolveListImageField, resolveStoreMediaFields } = require("../utils/mediaDelivery.util");
@@ -21,7 +22,7 @@ const {
 const OFFER_TYPES = ["discount", "fixed_price", "bogo", "fixed_discount", "free_item", "custom"];
 const MAX_OFFER_DAYS = 7;
 const OFFER_LIST_SELECT =
-    "title description offerType value originalPrice finalPrice freeDelivery currency priceUnit image priority isActive expiresAt autoDeleteAt storeItemCategory purchaseMode store createdAt";
+    "title description offerType value originalPrice finalPrice freeDelivery currency priceUnit image priority isActive expiresAt autoDeleteAt storeItemCategory purchaseMode reservationSettings store createdAt";
 
 function stripBase64Images(offer) {
     if (!offer || typeof offer !== "object") return offer;
@@ -77,6 +78,7 @@ function buildOfferPayload(body, storeId, userId) {
         storeItemCategoryId,
         relatedProductId,
         purchaseMode,
+        reservationSettings,
     } = body;
 
     const safeTitle = cleanString(title, { field: "title", max: 120, required: true });
@@ -125,6 +127,7 @@ function buildOfferPayload(body, storeId, userId) {
           ? requireObjectId(relatedProductId, "relatedProductId")
           : null,
         purchaseMode: normalizePurchaseMode(purchaseMode),
+        reservationSettings: normalizeReservationSettings(reservationSettings),
         expiryWarningSent: false,
         deletionWarningSent: false,
     };
@@ -165,7 +168,7 @@ exports.getOffers = async (req, res) => {
 
         const offers = await Offer.find({ isActive: true })
             .select(OFFER_LIST_SELECT)
-            .populate("store", "name logo region subRegion")
+            .populate("store", "name logo region subRegion isOpen")
             .sort({ priority: -1, createdAt: -1 })
             .limit(limit)
             .lean();
@@ -231,7 +234,7 @@ exports.getDashboardOffers = async (req, res) => {
                 isActive: true,
             })
                 .select(OFFER_LIST_SELECT)
-                .populate("store", "name logo category region subRegion")
+                .populate("store", "name logo category region subRegion isOpen")
                 .sort({ priority: -1, createdAt: -1 })
                 .limit(networkLimit)
                 .lean();
@@ -345,7 +348,7 @@ exports.updateOffer = async (req, res) => {
         const allowed = [
             "title", "description", "offerType", "value", "originalPrice",
             "finalPrice", "image", "freeDelivery", "expiresAt", "currency", "priceUnit",
-            "storeItemCategoryId", "relatedProductId", "isActive", "purchaseMode",
+            "storeItemCategoryId", "relatedProductId", "isActive", "purchaseMode", "reservationSettings",
         ];
         for (const field of allowed) {
             if (field === "storeItemCategoryId") {
@@ -386,6 +389,7 @@ exports.updateOffer = async (req, res) => {
             else if (field === "currency") offer.currency = normalizeCurrency(patch.currency);
             else if (field === "priceUnit") offer.priceUnit = cleanString(patch.priceUnit, { field: "priceUnit", max: 40 });
             else if (field === "purchaseMode") offer.purchaseMode = normalizePurchaseMode(patch.purchaseMode);
+            else if (field === "reservationSettings") offer.reservationSettings = normalizeReservationSettings(patch.reservationSettings);
             else if (field === "expiresAt") {
                 const anchor = offer.createdAt || new Date();
                 offer.expiresAt = assertExpiresWithinMaxDays(patch.expiresAt, anchor);

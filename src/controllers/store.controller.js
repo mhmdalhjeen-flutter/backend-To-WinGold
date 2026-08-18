@@ -10,6 +10,7 @@ const { assignUniqueStorePrefix } = require("../utils/storePrefix");
 const { getCustomerVisibleStoreIds } = require("../utils/storeFilter");
 const storeDiscovery = require("../services/storeDiscovery.service");
 const membershipService = require("../services/storeMembership.service");
+const storeQrOnboardService = require("../services/storeQrOnboard.service");
 const { processDataUrlImage, processOptionalImage } = require("../utils/imageProcess.util");
 const { resolveListImageField, resolveStoreMediaFields } = require("../utils/mediaDelivery.util");
 const {
@@ -34,9 +35,9 @@ const { resolveMonthlyVisits, incrementStoreVisits } = require("../utils/storeVi
 const { applyProductDisplayPrioritySort } = require("../utils/displayPriority.util");
 
 const OFFER_LIST_SELECT =
-  "title description offerType value originalPrice finalPrice freeDelivery currency priceUnit purchaseMode image priority featuredPriority displayPriority views clicks ratingAvg ratingCount isFeatured isExtended store createdAt expiresAt isActive storeItemCategory";
+  "title description offerType value originalPrice finalPrice freeDelivery currency priceUnit purchaseMode reservationSettings image priority featuredPriority displayPriority views clicks ratingAvg ratingCount isFeatured isExtended store createdAt expiresAt isActive storeItemCategory";
 const PRODUCT_LIST_SELECT =
-  "name description price currency priceUnit purchaseMode wholesalePrice isWholesale minOrderQuantity image stock freeDelivery ratingAvg ratingCount displayPriority isActive storeItemCategory store createdAt";
+  "name description price currency priceUnit purchaseMode reservationSettings wholesalePrice isWholesale minOrderQuantity image stock freeDelivery ratingAvg ratingCount displayPriority isActive storeItemCategory store createdAt";
 
 function stripBase64Images(offer) {
   if (!offer || typeof offer !== "object") return offer;
@@ -177,6 +178,31 @@ exports.followStore = async (req, res) => {
     }
 };
 
+/** QR scan onboard: ensure follow + membership without toggling existing follow. */
+exports.applyStoreQrOnboard = async (req, res) => {
+    try {
+        const storeId = requireObjectId(req.params.storeId, "storeId");
+        const userId = req.user.id;
+        const result = await storeQrOnboardService.applyStoreQrOnboard({
+            userId,
+            storeId,
+            role: req.user.role,
+        });
+
+        res.status(200).json({
+            message: "تم الانضمام إلى المتجر بنجاح",
+            isFollowing: result.isFollowing,
+            isFollowingNetwork: result.isFollowing,
+            membershipStatus: result.membershipStatus,
+            alreadyFollowed: result.alreadyFollowed,
+            alreadyMember: result.alreadyMember,
+            errors: result.errors,
+        });
+    } catch (error) {
+        res.status(error.status || 500).json({ message: error.message });
+    }
+};
+
 // ================= جلب زبائن المتجر (للتاجر والأدمن) =================
 exports.getStoreCustomers = async (req, res) => {
     try {
@@ -260,7 +286,7 @@ exports.getStoreById = async (req, res) => {
         res.json({
             store: await attachStorePaymentSettings(resolveStoreMediaFields(store.toObject())),
             offers: allStoreOffers.map(stripBase64Images),
-            products: sortedProducts.map(stripBase64Image),
+            products: sortedProducts.map((product) => stripBase64Image({ ...product, store: storePlain })),
             itemCategories,
             isFollowing: isFollowingNetwork || membership?.status === "member" || membership?.status === "pending",
             isFollowingNetwork,
@@ -282,7 +308,7 @@ exports.getAllStores = async (req, res) => {
         if (region) query.region = cleanString(region, { field: "region", max: 120 });
         if (category) query.category = cleanString(category, { field: "category", max: 120 });
         const stores = await Store.find(query)
-            .select("name logo region subRegion category description customersCount ratingAvg ratingCount codePrefix createdAt")
+            .select("name logo region subRegion category description customersCount ratingAvg ratingCount codePrefix createdAt isOpen")
             .sort({ createdAt: -1 })
             .lean();
         res.json({ count: stores.length, stores: stores.map(stripBase64Logo) });
@@ -489,7 +515,7 @@ exports.updateMyStore = async (req, res) => {
         const store = await Store.findOne({ owner: req.user.id });
         if (!store) return res.status(404).json({ message: "لا يوجد متجر مرتبط بحسابك" });
 
-        const { logo, coverImage, name, description, phone, whatsapp, address, brandingWelcomeSeen, currencyPreferences, receivingMethods } = req.body;
+        const { logo, coverImage, name, description, phone, whatsapp, address, brandingWelcomeSeen, currencyPreferences, receivingMethods, isOpen } = req.body;
 
         const nameText = cleanString(name, { field: "name", max: 120 });
         if (nameText) store.name = nameText;
@@ -510,6 +536,12 @@ exports.updateMyStore = async (req, res) => {
             });
         }
         if (brandingWelcomeSeen !== undefined) store.brandingWelcomeSeen = !!brandingWelcomeSeen;
+        if (isOpen !== undefined) {
+            if (typeof isOpen !== "boolean") {
+                return res.status(400).json({ message: "حالة المتجر غير صالحة" });
+            }
+            store.isOpen = isOpen;
+        }
 
         if (phone !== undefined) {
             const cleanPhone = normalizeLocalPhone(phone);

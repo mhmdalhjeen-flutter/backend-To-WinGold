@@ -13,9 +13,10 @@ const { applyProductDisplayPrioritySort } = require("../utils/displayPriority.ut
 const { normalizeCurrency } = require("../utils/currency.util");
 
 const { normalizePurchaseMode } = require("../constants/purchaseMode.constants");
+const { normalizeReservationSettings } = require("../utils/reservationSettings.util");
 
 const PRODUCT_LIST_SELECT =
-    "name description price currency priceUnit wholesalePrice isWholesale minOrderQuantity image stock freeDelivery ratingAvg ratingCount displayPriority isActive storeItemCategory purchaseMode store createdAt";
+    "name description price currency priceUnit wholesalePrice isWholesale minOrderQuantity image stock freeDelivery ratingAvg ratingCount displayPriority isActive storeItemCategory purchaseMode reservationSettings store createdAt";
 
 function stripBase64Image(product) {
     if (!product || typeof product !== "object") return product;
@@ -45,6 +46,7 @@ exports.createProduct = async (req, res) => {
             freeDelivery,
             storeItemCategoryId,
             purchaseMode,
+            reservationSettings,
         } = req.body;
         if (!name || price == null) {
             return res.status(400).json({
@@ -69,6 +71,7 @@ exports.createProduct = async (req, res) => {
               ? requireObjectId(storeItemCategoryId, "storeItemCategoryId")
               : null,
             purchaseMode: normalizePurchaseMode(purchaseMode),
+            reservationSettings: normalizeReservationSettings(reservationSettings),
         });
 
         const storeSubscriberNotification = require("../services/storeSubscriberNotification.service");
@@ -112,7 +115,7 @@ exports.getWholesaleProducts = async (req, res) => {
             isActive: true 
         })
             .select(PRODUCT_LIST_SELECT)
-            .populate("store", "name phone whatsapp region")
+            .populate("store", "name phone whatsapp region isOpen")
             .lean();
 
         res.json({
@@ -229,7 +232,7 @@ exports.updateProduct = async (req, res) => {
         const product = await Product.findById(productId);
         if (!product) return res.status(404).json({ message: "المنتج غير موجود" });
 
-        const allowed = ["name", "description", "price", "currency", "priceUnit", "image", "isWholesale", "storeItemCategoryId", "freeDelivery", "isActive", "purchaseMode"];
+        const allowed = ["name", "description", "price", "currency", "priceUnit", "image", "isWholesale", "storeItemCategoryId", "freeDelivery", "isActive", "purchaseMode", "reservationSettings"];
         for (const field of allowed) {
             if (req.body[field] === undefined) continue;
             if (field === "storeItemCategoryId") {
@@ -257,6 +260,8 @@ exports.updateProduct = async (req, res) => {
                 product.isActive = !!req.body.isActive;
             } else if (field === "purchaseMode") {
                 product.purchaseMode = normalizePurchaseMode(req.body.purchaseMode);
+            } else if (field === "reservationSettings") {
+                product.reservationSettings = normalizeReservationSettings(req.body.reservationSettings);
             } else if (field === "priceUnit") {
                 product.priceUnit = cleanString(req.body.priceUnit, { field: "priceUnit", max: 40 });
             } else {

@@ -15,6 +15,7 @@ const {
   joinStore,
   leaveStore,
   followStore,
+  applyStoreQrOnboard,
   getMyStoreCodeStats,
   getStoreMemberPrizes,
   getStoreCompetitionsEnabled,
@@ -116,6 +117,7 @@ router.get("/warehouses", authMiddleware, roleMiddleware.business, requireStoreO
 router.post("/:storeId/join", authMiddleware, joinStore);
 router.post("/:storeId/leave", authMiddleware, leaveStore);
 router.post("/:storeId/follow", authMiddleware, followStore);
+router.post("/:storeId/qr-onboard", authMiddleware, applyStoreQrOnboard);
 router.get("/:storeId/member-prizes", optionalAuth, getStoreMemberPrizes);
 
 router.get("/:id/logo", optionalAuth, async (req, res) => {

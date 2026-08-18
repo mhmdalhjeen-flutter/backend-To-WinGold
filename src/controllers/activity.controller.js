@@ -152,13 +152,13 @@ exports.getFavorites = async (req, res) => {
       offerIds.length
         ? Offer.find({ _id: { $in: offerIds }, isActive: true }).populate(
           "store",
-          "name logo region subRegion category",
+          "name logo region subRegion category isOpen",
         ).lean()
         : [],
       productIds.length
         ? Product.find({ _id: { $in: productIds }, isActive: { $ne: false } }).populate(
           "store",
-          "name logo region subRegion category",
+          "name logo region subRegion category isOpen",
         ).lean()
         : [],
     ]);
@@ -222,7 +222,7 @@ exports.getRecommendations = async (req, res) => {
     // 2. لا إشارات → fallback: أحدث العروض.
     if (categories.length === 0 && regions.length === 0 && searchTerms.length === 0) {
       const latest = await Offer.find({ isActive: true })
-        .populate("store", "name logo region subRegion category")
+        .populate("store", "name logo region subRegion category isOpen")
         .sort({ createdAt: -1 })
         .limit(limit);
       return res.json({ recommendations: latest, basedOn: { categories: [], regions: [], fallback: true } });
@@ -239,7 +239,7 @@ exports.getRecommendations = async (req, res) => {
       const storeMap = new Map(stores.map((s) => [String(s._id), s]));
       const storeIds = stores.map((s) => s._id);
       candidateOffers = await Offer.find({ isActive: true, store: { $in: storeIds } })
-        .populate("store", "name logo region subRegion category")
+        .populate("store", "name logo region subRegion category isOpen")
         .limit(60)
         .lean();
 
@@ -267,7 +267,7 @@ exports.getRecommendations = async (req, res) => {
     if (recommendations.length < limit) {
       const have = new Set(recommendations.map((o) => String(o._id)));
       const filler = await Offer.find({ isActive: true })
-        .populate("store", "name logo region subRegion category")
+        .populate("store", "name logo region subRegion category isOpen")
         .sort({ createdAt: -1 })
         .limit(limit)
         .lean();

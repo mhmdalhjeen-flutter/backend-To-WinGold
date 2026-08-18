@@ -62,6 +62,12 @@ const storeSchema = new mongoose.Schema({
         default: false,
     },
 
+    /** Owner-controlled trading hours. false = closed for the day; store stays visible. */
+    isOpen: {
+        type: Boolean,
+        default: true,
+    },
+
     activationCode: {
         type: String,
     },
