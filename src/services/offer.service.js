@@ -274,6 +274,16 @@ async function getOfferById(offerId, { incrementViews = false, userId, clientId 
   return attachPricing(offer);
 }
 
+function applyReelOfferVisibilityFilter(offerQuery) {
+  // Same rule as isOfferPubliclyVisible / reservation: no expiresAt still means public.
+  offerQuery.$or = [
+    { expiresAt: { $exists: false } },
+    { expiresAt: null },
+    { expiresAt: { $gt: new Date() } },
+  ];
+  return offerQuery;
+}
+
 async function listCategoryReels(query, userId) {
   const { region, subRegion } = query;
   const perReel = Math.min(parseInt(query.limit, 10) || 20, 40);
@@ -283,7 +293,7 @@ async function listCategoryReels(query, userId) {
   const sections = buildDisplaySections(categories);
 
   const offerQuery = { isActive: true };
-  applyPublicExpiryFilter(offerQuery);
+  applyReelOfferVisibilityFilter(offerQuery);
   const storeQuery = {};
   const regionFilter = subRegion || region;
   if (regionFilter) await applyRegionToStoreQuery(storeQuery, regionFilter);
@@ -332,6 +342,7 @@ async function listCategoryReels(query, userId) {
 
   const reels = [];
   const assignedOfferIds = new Set();
+  const assignedProductIds = new Set();
 
   for (const section of sections) {
     const key = sectionKey(section);
@@ -340,6 +351,7 @@ async function listCategoryReels(query, userId) {
     if (!categoryOffers.length && !categoryProducts.length) continue;
 
     categoryOffers.forEach((o) => assignedOfferIds.add(String(o._id)));
+    categoryProducts.forEach((p) => assignedProductIds.add(String(p._id)));
 
     reels.push({
       categoryId: section.categoryId,
@@ -353,8 +365,9 @@ async function listCategoryReels(query, userId) {
     });
   }
 
-  const uncategorized = ranked.filter((o) => !assignedOfferIds.has(String(o._id)));
-  if (uncategorized.length) {
+  const uncategorizedOffers = ranked.filter((o) => !assignedOfferIds.has(String(o._id)));
+  const uncategorizedProducts = sortedProducts.filter((p) => !assignedProductIds.has(String(p._id)));
+  if (uncategorizedOffers.length || uncategorizedProducts.length) {
     reels.push({
       categoryId: null,
       categoryName: "عروض متنوعة",
@@ -362,8 +375,8 @@ async function listCategoryReels(query, userId) {
       parentCategoryId: null,
       parentCategoryName: null,
       isParentFallback: false,
-      offers: uncategorized.slice(0, perReel),
-      products: [],
+      offers: uncategorizedOffers.slice(0, perReel),
+      products: uncategorizedProducts.slice(0, perReel).map(stripProductHeavyFields),
     });
   }
 

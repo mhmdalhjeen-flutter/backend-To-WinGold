@@ -90,6 +90,82 @@ test("buildReservationAnswers rejects undeclared fields", () => {
   );
 });
 
+test("normalizeReservationSettings accepts note fields and does not make them required", () => {
+  const settings = normalizeReservationSettings({
+    enabled: true,
+    fields: [
+      { id: "name", label: "الاسم", type: "text", required: true, order: 0 },
+      { id: "n1", type: "note", content: "يرجى الحضور قبل الموعد بـ 15 دقيقة", required: true, order: 1 },
+      { id: "phone", label: "رقم الهاتف", type: "phone", required: true, order: 2 },
+    ],
+  });
+  assert.equal(settings.fields.length, 3);
+  assert.equal(settings.fields[1].type, "note");
+  assert.equal(settings.fields[1].required, false);
+  assert.equal(settings.fields[1].label, "ملاحظة");
+  assert.equal(settings.fields[1].content, "يرجى الحضور قبل الموعد بـ 15 دقيقة");
+});
+
+test("normalizeReservationSettings maps Arabic note type and uses label as content fallback", () => {
+  const settings = normalizeReservationSettings({
+    enabled: true,
+    fields: [{ id: "n1", label: "يمكنك التواصل مع المتجر عند الحاجة", type: "ملاحظة" }],
+  });
+  assert.equal(settings.fields[0].type, "note");
+  assert.equal(settings.fields[0].content, "يمكنك التواصل مع المتجر عند الحاجة");
+});
+
+test("normalizeReservationSettings rejects empty notes", () => {
+  assert.throws(
+    () => normalizeReservationSettings({
+      enabled: true,
+      fields: [{ id: "n1", type: "note", content: "" }],
+    }),
+    (err) => err.status === 400,
+  );
+});
+
+test("buildReservationAnswers ignores notes and still requires input fields", () => {
+  const settings = normalizeReservationSettings({
+    enabled: true,
+    fields: [
+      { id: "n0", type: "note", content: "قبل كل الحقول", order: 0 },
+      { id: "name", label: "الاسم", type: "text", required: true, order: 1 },
+      { id: "n1", type: "note", content: "بين الحقول", order: 2 },
+      { id: "phone", label: "رقم الهاتف", type: "phone", required: true, order: 3 },
+      { id: "n2", type: "note", content: "بعد كل الحقول", order: 4 },
+    ],
+  });
+  assert.throws(
+    () => buildReservationAnswers(settings, [{ fieldId: "phone", value: "0590000000" }]),
+    (err) => err.status === 400 && /الاسم/.test(err.message),
+  );
+  const answers = buildReservationAnswers(settings, [
+    { fieldId: "name", value: "أحمد" },
+    { fieldId: "phone", value: "0590000000" },
+    { fieldId: "n1", value: "should-not-store" },
+  ]);
+  assert.deepEqual(answers.map((row) => row.fieldId), ["name", "phone"]);
+  assert.equal(answers.some((row) => row.type === "note"), false);
+});
+
+test("existing reservation configurations without notes still work", () => {
+  const settings = normalizeReservationSettings({
+    enabled: true,
+    fields: [
+      { id: "name", label: "الاسم", type: "text", required: true, order: 0 },
+      { id: "date", label: "التاريخ", type: "date", required: false, order: 1 },
+    ],
+  });
+  const answers = buildReservationAnswers(settings, [
+    { fieldId: "name", value: "سارة" },
+    { fieldId: "date", value: "2026-08-20" },
+  ]);
+  assert.equal(answers.length, 2);
+  assert.equal(answers[0].value, "سارة");
+  assert.equal(answers[1].type, "date");
+});
+
 test("reservation notification URLs target store and customer apps", () => {
   assert.equal(resolvePushTargetApp("store_new_reservation"), "store");
   assert.equal(resolveStorePushUrl("store_new_reservation", {}), "/store/reservations");

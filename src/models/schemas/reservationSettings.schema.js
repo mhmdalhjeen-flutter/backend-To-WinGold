@@ -5,10 +5,11 @@ const reservationFieldSchema = new mongoose.Schema({
   label: { type: String, required: true, trim: true, maxlength: 80 },
   type: {
     type: String,
-    enum: ["text", "phone", "number", "date", "time", "textarea"],
+    enum: ["text", "phone", "number", "date", "time", "textarea", "note"],
     default: "text",
   },
   required: { type: Boolean, default: false },
+  content: { type: String, default: "", trim: true, maxlength: 500 },
   order: { type: Number, default: 0 },
 }, { _id: false });
 

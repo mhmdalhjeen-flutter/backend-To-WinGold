@@ -1,10 +1,13 @@
 const { assertNoMongoOperators, cleanString } = require("./inputSecurity.util");
 
-const FIELD_TYPES = Object.freeze(["text", "phone", "number", "date", "time", "textarea"]);
+const FIELD_TYPES = Object.freeze(["text", "phone", "number", "date", "time", "textarea", "note"]);
+const INPUT_FIELD_TYPES = Object.freeze(["text", "phone", "number", "date", "time", "textarea"]);
 const MAX_FIELDS = 20;
 const MAX_LABEL = 80;
 const MAX_VALUE = 500;
+const MAX_NOTE_CONTENT = 500;
 const MAX_FIELD_ID = 80;
+const NOTE_LABEL = "ملاحظة";
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const TIME_RE = /^\d{2}:\d{2}$/;
@@ -13,9 +16,14 @@ function defaultReservationSettings() {
   return { enabled: false, fields: [] };
 }
 
+function isReservationNoteField(field) {
+  return String(field?.type || "") === "note";
+}
+
 function normalizeFieldType(raw) {
   const type = cleanString(raw, { field: "type", max: 20 }) || "text";
   if (type === "long_text" || type === "longtext" || type === "long text") return "textarea";
+  if (type === "ملاحظة") return "note";
   return FIELD_TYPES.includes(type) ? type : "text";
 }
 
@@ -27,12 +35,28 @@ function normalizeField(raw, index) {
 
   const id = cleanString(raw.id || raw.fieldId, { field: "fieldId", max: MAX_FIELD_ID })
     || `field-${index}`;
-  const label = cleanString(raw.label || raw.name, { field: "label", max: MAX_LABEL, required: true });
   const type = normalizeFieldType(raw.type);
-  const required = !!raw.required;
   const order = Number.isInteger(Number(raw.order)) ? Number(raw.order) : index;
 
-  return { id, label, type, required, order };
+  if (type === "note") {
+    let content = cleanString(raw.content, { field: "content", max: MAX_NOTE_CONTENT });
+    const labelRaw = cleanString(raw.label || raw.name, { field: "label", max: MAX_LABEL });
+    if (!content) content = labelRaw;
+    if (!content) {
+      throw Object.assign(new Error("نص الملاحظة مطلوب"), { status: 400 });
+    }
+    return {
+      id,
+      label: labelRaw || NOTE_LABEL,
+      type,
+      required: false,
+      content,
+      order,
+    };
+  }
+
+  const label = cleanString(raw.label || raw.name, { field: "label", max: MAX_LABEL, required: true });
+  return { id, label, type, required: !!raw.required, order };
 }
 
 function normalizeReservationSettings(raw) {
@@ -107,14 +131,17 @@ function buildReservationAnswers(settings, submitted) {
     byId.set(fieldId, answer);
   }
 
-  const configuredIds = new Set((settings.fields || []).map((field) => field.id));
+  const inputFields = (settings.fields || []).filter((field) => !isReservationNoteField(field));
+  const noteIds = new Set((settings.fields || []).filter(isReservationNoteField).map((field) => field.id));
+  const configuredIds = new Set(inputFields.map((field) => field.id));
   for (const fieldId of byId.keys()) {
+    if (noteIds.has(fieldId)) continue;
     if (!configuredIds.has(fieldId)) {
       throw Object.assign(new Error("تم إرسال حقول غير مسموحة"), { status: 400 });
     }
   }
 
-  return (settings.fields || []).map((field) => {
+  return inputFields.map((field) => {
     const raw = byId.get(field.id);
     const value = coerceAnswerValue(field.type, raw?.value, field.label);
     if (field.required && !value) {
@@ -142,12 +169,15 @@ function normalizeSelectedVariant(raw) {
 
 module.exports = {
   FIELD_TYPES,
+  INPUT_FIELD_TYPES,
   MAX_FIELDS,
   MAX_LABEL,
   MAX_VALUE,
+  MAX_NOTE_CONTENT,
   buildReservationAnswers,
   defaultReservationSettings,
   isReservationEnabled,
+  isReservationNoteField,
   normalizeReservationSettings,
   normalizeSelectedVariant,
 };
