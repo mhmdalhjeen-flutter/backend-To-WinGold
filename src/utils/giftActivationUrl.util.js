@@ -1,4 +1,7 @@
 const DEFAULT_CUSTOMER_APP_URL = "https://wingolgmoll.com";
+const LEGACY_CUSTOMER_HOSTS = new Set([
+  "win-gold-shopping.mhmdalhjeen.workers.dev",
+]);
 
 function normalizeWebsiteBase(url) {
   let base = String(url || DEFAULT_CUSTOMER_APP_URL).trim();
@@ -6,7 +9,16 @@ function normalizeWebsiteBase(url) {
   if (base && !/^https?:\/\//i.test(base)) {
     base = `https://${base}`;
   }
-  return base.replace(/\/$/, "");
+  base = base.replace(/\/$/, "");
+  try {
+    const host = new URL(base).hostname.toLowerCase();
+    if (LEGACY_CUSTOMER_HOSTS.has(host)) {
+      return DEFAULT_CUSTOMER_APP_URL;
+    }
+  } catch {
+    /* keep normalized base */
+  }
+  return base;
 }
 
 function normalizeGiftCodeForQr(code) {

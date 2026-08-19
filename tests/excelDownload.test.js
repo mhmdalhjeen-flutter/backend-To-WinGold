@@ -119,6 +119,25 @@ test("buildGiftActivationUrl avoids double https and nested gift URLs", () => {
     ),
     "https://wingolgmoll.com/?gift=E113-7F3121",
   );
+  assert.equal(
+    buildGiftActivationUrl(
+      "https://win-gold-shopping.mhmdalhjeen.workers.dev",
+      "E113-7F3121",
+    ),
+    "https://wingolgmoll.com/?gift=E113-7F3121",
+  );
+});
+
+test("getCustomerAppUrl maps the legacy workers.dev customer host", () => {
+  const { getCustomerAppUrl } = require("../src/utils/giftActivationUrl.util");
+  const prev = process.env.CUSTOMER_APP_URL;
+  process.env.CUSTOMER_APP_URL = "https://win-gold-shopping.mhmdalhjeen.workers.dev";
+  try {
+    assert.equal(getCustomerAppUrl(), "https://wingolgmoll.com");
+  } finally {
+    if (prev === undefined) delete process.env.CUSTOMER_APP_URL;
+    else process.env.CUSTOMER_APP_URL = prev;
+  }
 });
 
 test("normalizeExportCodeRow maps cardSource and rewardPoints", () => {
