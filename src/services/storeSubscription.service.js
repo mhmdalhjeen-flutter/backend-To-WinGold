@@ -12,7 +12,6 @@ const {
 } = require("../constants/storeSubscription.constants");
 const {
   getCurrentMonthKey,
-  addMonthsToMonthKey,
 } = require("../utils/subscriptionMonth.util");
 const { formatMonthLabel } = require("../utils/billingMonth.util");
 const { parseSubscriptionPaymentSubmission } = require("../utils/storeSubscriptionPayment.util");
@@ -59,12 +58,14 @@ async function getCurrentPeriod(storeId, monthKey = getCurrentMonthKey()) {
   return StoreSubscriptionPeriod.findOne({ store: storeId, monthKey }).lean();
 }
 
-async function findActiveCountingPeriod(storeId) {
-  return StoreSubscriptionPeriod.findOne({
+async function findActiveCountingPeriod(storeId, monthKey = null) {
+  const query = {
     store: storeId,
     status: SUBSCRIPTION_STATUSES.COUNTING,
     expiredAt: null,
-  }).sort({ monthKey: -1 });
+  };
+  if (monthKey) query.monthKey = monthKey;
+  return StoreSubscriptionPeriod.findOne(query).sort({ monthKey: -1 });
 }
 
 async function findOldestOpenSubscriptionPeriod(storeId) {
@@ -82,20 +83,11 @@ async function findEligibleStoresForSubscriptionRequest() {
     .lean();
 }
 
-async function resolveCycleMonthKeyForStore(storeId, date = new Date()) {
-  const counting = await findActiveCountingPeriod(storeId);
-  if (counting) return counting.monthKey;
-
-  const latestClosed = await StoreSubscriptionPeriod.findOne({
-    store: storeId,
-    status: { $in: CLOSED_SUBSCRIPTION_STATUSES },
-    expiredAt: null,
-  }).sort({ monthKey: -1 }).lean();
-
-  if (latestClosed) {
-    return addMonthsToMonthKey(latestClosed.monthKey, 1);
-  }
-
+/**
+ * Subscription period month is always the calendar month of the request date.
+ * Do not advance from previous closed periods or request sequence.
+ */
+async function resolveCycleMonthKeyForStore(_storeId, date = new Date()) {
   return getCurrentMonthKey(date);
 }
 
@@ -164,46 +156,43 @@ async function findOrCreateCountingPeriod(storeId, monthKey, storeDoc = null) {
   }
 }
 
-async function ensureCountingPeriodForRequest(storeId) {
-  const activeCounting = await findActiveCountingPeriod(storeId);
-  if (activeCounting) return activeCounting;
-
-  let monthKey = await resolveCycleMonthKeyForStore(storeId);
+async function ensureCountingPeriodForRequest(storeId, date = new Date()) {
+  const monthKey = getCurrentMonthKey(date);
   const store = await Store.findById(storeId).select("subscriptionCardConfig").lean();
   if (!store) return null;
 
-  for (let attempt = 0; attempt < 4; attempt += 1) {
-    const period = await findOrCreateCountingPeriod(storeId, monthKey, store);
-    if (!period) return null;
-
-    if (period.status === SUBSCRIPTION_STATUSES.COUNTING && !period.expiredAt) {
-      return period;
-    }
-
-    if (period.expiredAt) {
-      return reactivateCountingPeriod(period, store);
-    }
-
-    if (CLOSED_SET.has(period.status)) {
-      monthKey = addMonthsToMonthKey(monthKey, 1);
-      continue;
-    }
-
-    return null;
+  const existing = await StoreSubscriptionPeriod.findOne({ store: storeId, monthKey });
+  if (existing?.status === SUBSCRIPTION_STATUSES.COUNTING && !existing.expiredAt) {
+    return existing;
+  }
+  if (existing?.expiredAt) {
+    return reactivateCountingPeriod(existing, store);
+  }
+  // Closed or open payment periods for this calendar month must not advance to a future month.
+  if (existing) {
+    return existing;
   }
 
-  return null;
+  return findOrCreateCountingPeriod(storeId, monthKey, store);
 }
 
 async function ensureActiveCountingPeriod(storeId) {
   return ensureCountingPeriodForRequest(storeId);
 }
 
-async function startNewCountingCycleAfterClose(storeId, closedMonthKey) {
-  const targetMonthKey = addMonthsToMonthKey(closedMonthKey || getCurrentMonthKey(), 1);
+/**
+ * After closing a period, only prepare COUNTING for the current calendar month.
+ * Never create a future month while still inside the closed period's calendar month.
+ */
+async function startNewCountingCycleAfterClose(storeId, closedMonthKey, date = new Date()) {
+  const currentKey = getCurrentMonthKey(date);
+  if (closedMonthKey && closedMonthKey >= currentKey) {
+    return null;
+  }
+
   const existing = await StoreSubscriptionPeriod.findOne({
     store: storeId,
-    monthKey: targetMonthKey,
+    monthKey: currentKey,
   });
 
   if (existing?.status === SUBSCRIPTION_STATUSES.COUNTING && !existing.expiredAt) {
@@ -215,12 +204,11 @@ async function startNewCountingCycleAfterClose(storeId, closedMonthKey) {
     return reactivateCountingPeriod(existing, store);
   }
 
-  if (existing && CLOSED_SET.has(existing.status)) {
-    return findOrCreateCountingPeriod(storeId, addMonthsToMonthKey(targetMonthKey, 1));
+  if (existing && (CLOSED_SET.has(existing.status) || OPEN_SUBSCRIPTION_STATUSES.includes(existing.status))) {
+    return existing;
   }
 
-  if (existing) return existing;
-  return findOrCreateCountingPeriod(storeId, targetMonthKey);
+  return findOrCreateCountingPeriod(storeId, currentKey);
 }
 
 async function resolveAdminListMonthKey(monthKey) {
@@ -249,15 +237,16 @@ async function getStoreSubscriptionStatus(storeId, date = new Date()) {
     throw err;
   }
 
-  const [countingPeriod, openPeriod] = await Promise.all([
-    findActiveCountingPeriod(storeId).then((p) => (p ? p.toObject?.() || p : null)),
+  const calendarKey = getCurrentMonthKey(date);
+  const [countingPeriod, openPeriod, calendarPeriod] = await Promise.all([
+    findActiveCountingPeriod(storeId, calendarKey).then((p) => (p ? p.toObject?.() || p : null)),
     findOldestOpenSubscriptionPeriod(storeId),
+    getCurrentPeriod(storeId, calendarKey),
   ]);
 
-  const currentMonthKey = openPeriod?.monthKey
-    || countingPeriod?.monthKey
-    || getCurrentMonthKey(date);
-  const period = openPeriod || countingPeriod || await getCurrentPeriod(storeId, currentMonthKey);
+  // Prefer an open payment claim (any month still owed), then this calendar month's period.
+  const period = openPeriod || calendarPeriod || countingPeriod || null;
+  const currentMonthKey = period?.monthKey || calendarKey;
   const status = period?.status || null;
   const paymentPending = status === SUBSCRIPTION_STATUSES.PAYMENT_PENDING;
   const paymentRejected = status === SUBSCRIPTION_STATUSES.PAYMENT_REJECTED;
@@ -269,7 +258,7 @@ async function getStoreSubscriptionStatus(storeId, date = new Date()) {
     storeName: store.name,
     monthKey: period?.monthKey || currentMonthKey,
     monthLabel: formatMonthLabel(period?.monthKey || currentMonthKey),
-    currentCycleMonthKey: countingPeriod?.monthKey || openPeriod?.monthKey || currentMonthKey,
+    currentCycleMonthKey: calendarKey,
     subscriptionActive: store.subscriptionActive !== false,
     status,
     period,
@@ -746,7 +735,9 @@ function serializeSubscriptionPeriod(period) {
   };
 }
 
-async function requestSubscriptionForStore(storeId) {
+async function requestSubscriptionForStore(storeId, date = new Date()) {
+  const calendarKey = getCurrentMonthKey(date);
+
   const openBill = await findOldestOpenSubscriptionPeriod(storeId);
   if (openBill) {
     return {
@@ -759,9 +750,42 @@ async function requestSubscriptionForStore(storeId) {
     };
   }
 
-  const countingPeriod = await ensureCountingPeriodForRequest(storeId);
+  const calendarPeriod = await StoreSubscriptionPeriod.findOne({
+    store: storeId,
+    monthKey: calendarKey,
+  });
+
+  // Current calendar month already closed — do not invent the next month.
+  if (calendarPeriod && CLOSED_SET.has(calendarPeriod.status) && !calendarPeriod.expiredAt) {
+    return {
+      storeId,
+      alreadyRequested: true,
+      monthKey: calendarPeriod.monthKey,
+      status: calendarPeriod.status,
+      cardConfig: calendarPeriod.cardConfig,
+      openPeriod: serializeSubscriptionPeriod(calendarPeriod),
+    };
+  }
+
+  const countingPeriod = await ensureCountingPeriodForRequest(storeId, date);
   if (!countingPeriod || countingPeriod.status !== SUBSCRIPTION_STATUSES.COUNTING) {
-    return { storeId, skipped: true, reason: "no_counting_period" };
+    return {
+      storeId,
+      skipped: true,
+      reason: countingPeriod ? "calendar_month_not_countable" : "no_counting_period",
+      monthKey: countingPeriod?.monthKey || calendarKey,
+      status: countingPeriod?.status,
+    };
+  }
+
+  // Never finalize a period outside the request's calendar month.
+  if (countingPeriod.monthKey !== calendarKey) {
+    return {
+      storeId,
+      skipped: true,
+      reason: "counting_month_mismatch",
+      monthKey: calendarKey,
+    };
   }
 
   const store = await Store.findById(storeId).select("subscriptionCardConfig").lean();

@@ -110,7 +110,12 @@ function buildFindOneQuery(run) {
 StoreSubscriptionPeriod.findOne = (query) => buildFindOneQuery(async () => {
   if (query._id) return periods.get(String(query._id)) || null;
   if (query.store && query.monthKey) {
-    return periods.get(periodKey(query.store, query.monthKey)) || null;
+    const row = periods.get(periodKey(query.store, query.monthKey)) || null;
+    if (!row) return null;
+    if (query.status && row.status !== query.status) return null;
+    if (query.status?.$in && !query.status.$in.includes(row.status)) return null;
+    if (query.expiredAt === null && row.expiredAt) return null;
+    return row;
   }
   if (query.store && query.status === SUBSCRIPTION_STATUSES.COUNTING && query.expiredAt === null && !query.monthKey) {
     const rows = Array.from(periods.values())
@@ -313,41 +318,135 @@ test("reject keeps same month and resubmit stays on same month", async () => {
   assert.equal(status.status, SUBSCRIPTION_STATUSES.PAYMENT_PENDING);
 });
 
-test("approve creates next counting cycle only after completion", async () => {
+test("approve does not create a future counting month in the same calendar month", async () => {
+  const calendarKey = getCurrentMonthKey();
   const pending = attachSave({
     _id: new mongoose.Types.ObjectId(),
     store: storeId,
-    monthKey: "2026-08",
+    monthKey: calendarKey,
     status: SUBSCRIPTION_STATUSES.PAYMENT_PENDING,
     cardConfig: DEFAULT_SUBSCRIPTION_CARD_CONFIG,
     expiredAt: null,
   });
-  periods.set(periodKey(storeId, "2026-08"), pending);
+  periods.set(periodKey(storeId, calendarKey), pending);
   periods.set(String(pending._id), pending);
 
   await approveSubscriptionPayment(pending._id, adminId);
-  assert.equal(periods.get(periodKey(storeId, "2026-08")).status, SUBSCRIPTION_STATUSES.ACTIVE);
+  assert.equal(periods.get(periodKey(storeId, calendarKey)).status, SUBSCRIPTION_STATUSES.ACTIVE);
 
-  const next = periods.get(periodKey(storeId, "2026-09"));
-  assert.ok(next);
-  assert.equal(next.status, SUBSCRIPTION_STATUSES.COUNTING);
+  const nextKey = require("../src/utils/subscriptionMonth.util").addMonthsToMonthKey(calendarKey, 1);
+  assert.equal(periods.get(periodKey(storeId, nextKey)), undefined);
 });
 
-test("exemption creates next counting cycle", async () => {
+test("exemption does not create a future counting month in the same calendar month", async () => {
+  const calendarKey = getCurrentMonthKey();
   const awaiting = attachSave({
     _id: new mongoose.Types.ObjectId(),
     store: storeId,
-    monthKey: "2026-08",
+    monthKey: calendarKey,
     status: SUBSCRIPTION_STATUSES.AWAITING_PAYMENT,
     cardConfig: DEFAULT_SUBSCRIPTION_CARD_CONFIG,
     expiredAt: null,
   });
-  periods.set(periodKey(storeId, "2026-08"), awaiting);
+  periods.set(periodKey(storeId, calendarKey), awaiting);
   periods.set(String(awaiting._id), awaiting);
 
-  await exemptStoreForMonth(storeId, adminId, "2026-08");
-  assert.equal(periods.get(periodKey(storeId, "2026-08")).status, SUBSCRIPTION_STATUSES.EXEMPTED);
-  assert.equal(periods.get(periodKey(storeId, "2026-09")).status, SUBSCRIPTION_STATUSES.COUNTING);
+  await exemptStoreForMonth(storeId, adminId, calendarKey);
+  assert.equal(periods.get(periodKey(storeId, calendarKey)).status, SUBSCRIPTION_STATUSES.EXEMPTED);
+  const nextKey = require("../src/utils/subscriptionMonth.util").addMonthsToMonthKey(calendarKey, 1);
+  assert.equal(periods.get(periodKey(storeId, nextKey)), undefined);
+});
+
+test("multiple requests in the same calendar month never advance the month", async () => {
+  const calendarKey = getCurrentMonthKey();
+  const first = await requestSubscriptionForStore(storeId);
+  assert.equal(first.finalized, true);
+  assert.equal(first.monthKey, calendarKey);
+
+  const second = await requestSubscriptionForStore(storeId);
+  assert.equal(second.alreadyRequested, true);
+  assert.equal(second.monthKey, calendarKey);
+
+  const third = await requestSubscriptionForStore(storeId);
+  assert.equal(third.alreadyRequested, true);
+  assert.equal(third.monthKey, calendarKey);
+
+  const nextKey = require("../src/utils/subscriptionMonth.util").addMonthsToMonthKey(calendarKey, 1);
+  assert.equal(periods.get(periodKey(storeId, nextKey)), undefined);
+});
+
+test("request after approval in the same month stays on the calendar month", async () => {
+  const calendarKey = getCurrentMonthKey();
+  const first = await requestSubscriptionForStore(storeId);
+  assert.equal(first.monthKey, calendarKey);
+
+  const period = periods.get(periodKey(storeId, calendarKey));
+  period.status = SUBSCRIPTION_STATUSES.PAYMENT_PENDING;
+  await approveSubscriptionPayment(period._id, adminId);
+
+  const again = await requestSubscriptionForStore(storeId);
+  assert.equal(again.alreadyRequested, true);
+  assert.equal(again.monthKey, calendarKey);
+  const nextKey = require("../src/utils/subscriptionMonth.util").addMonthsToMonthKey(calendarKey, 1);
+  assert.equal(periods.get(periodKey(storeId, nextKey)), undefined);
+});
+
+test("stray future counting period is ignored when requesting in the current month", async () => {
+  const calendarKey = getCurrentMonthKey();
+  const nextKey = require("../src/utils/subscriptionMonth.util").addMonthsToMonthKey(calendarKey, 1);
+  const futureCounting = attachSave({
+    _id: new mongoose.Types.ObjectId(),
+    store: storeId,
+    monthKey: nextKey,
+    status: SUBSCRIPTION_STATUSES.COUNTING,
+    cardConfig: DEFAULT_SUBSCRIPTION_CARD_CONFIG,
+    expiredAt: null,
+  });
+  periods.set(periodKey(storeId, nextKey), futureCounting);
+  periods.set(String(futureCounting._id), futureCounting);
+
+  const result = await requestSubscriptionForStore(storeId);
+  assert.equal(result.finalized, true);
+  assert.equal(result.monthKey, calendarKey);
+  assert.equal(periods.get(periodKey(storeId, calendarKey)).status, SUBSCRIPTION_STATUSES.AWAITING_PAYMENT);
+  assert.equal(periods.get(periodKey(storeId, nextKey)).status, SUBSCRIPTION_STATUSES.COUNTING);
+});
+
+test("admin and store owner share the same calendar month label", async () => {
+  const calendarKey = getCurrentMonthKey();
+  const result = await requestSubscriptionForStore(storeId);
+  const status = await getStoreSubscriptionStatus(storeId);
+  assert.equal(result.monthKey, calendarKey);
+  assert.equal(status.monthKey, calendarKey);
+  assert.equal(status.monthLabel, require("../src/utils/billingMonth.util").formatMonthLabel(calendarKey));
+});
+
+test("resolveCycleMonthKeyForStore always uses the calendar request date", async () => {
+  const aug = new Date(2026, 7, 12);
+  const sep = new Date(2026, 8, 1);
+  const dec = new Date(2026, 11, 31);
+  const jan = new Date(2027, 0, 1);
+  assert.equal(await resolveCycleMonthKeyForStore(storeId, aug), "2026-08");
+  assert.equal(await resolveCycleMonthKeyForStore(storeId, sep), "2026-09");
+  assert.equal(await resolveCycleMonthKeyForStore(storeId, dec), "2026-12");
+  assert.equal(await resolveCycleMonthKeyForStore(storeId, jan), "2027-01");
+});
+
+test("request in September uses September even if August was closed", async () => {
+  const august = attachSave({
+    _id: new mongoose.Types.ObjectId(),
+    store: storeId,
+    monthKey: "2026-08",
+    status: SUBSCRIPTION_STATUSES.ACTIVE,
+    cardConfig: DEFAULT_SUBSCRIPTION_CARD_CONFIG,
+    expiredAt: null,
+  });
+  periods.set(periodKey(storeId, "2026-08"), august);
+  periods.set(String(august._id), august);
+
+  const result = await requestSubscriptionForStore(storeId, new Date(2026, 8, 15));
+  assert.equal(result.finalized, true);
+  assert.equal(result.monthKey, "2026-09");
 });
 
 test("awaiting_payment blocks portal access flags", async () => {
